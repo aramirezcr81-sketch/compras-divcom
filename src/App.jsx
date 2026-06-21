@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx'
 import { supabase } from './supabaseClient'
 import Login from './Login'
 import ApgModal from './ApgModal'
+import UsuariosPendientesModal from './UsuariosPendientesModal'
 
 const ESTADOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN","ADJUDICADO","SIN EFECTO","PENDIENTE DE INICIAR","ARCHIVADO"]
 const TIPOS = ["CD","CDA","CDE","CDNC","CPA","LA","LAA","LP","OTRO"]
@@ -110,6 +111,7 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [perfil, setPerfil] = useState(null)
   const [loadingSession, setLoadingSession] = useState(true)
+  const [loadingPerfil, setLoadingPerfil] = useState(true)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -123,9 +125,10 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!session) { setPerfil(null); return }
+    if (!session) { setPerfil(null); setLoadingPerfil(false); return }
+    setLoadingPerfil(true)
     supabase.from('perfiles').select('*').eq('id', session.user.id).single()
-      .then(({ data }) => setPerfil(data))
+      .then(({ data }) => { setPerfil(data); setLoadingPerfil(false) })
   }, [session])
 
   if (loadingSession) {
@@ -134,7 +137,32 @@ export default function App() {
 
   if (!session) return <Login />
 
+  if (loadingPerfil) {
+    return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",fontFamily:"sans-serif",color:"#888"}}>Cargando...</div>
+  }
+
+  if (!perfil || !perfil.aprobado) {
+    return <EsperandoAprobacion session={session} />
+  }
+
   return <Dashboard session={session} perfil={perfil} />
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+function EsperandoAprobacion({ session }) {
+  return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",fontFamily:"sans-serif",background:"#f4f6f9",padding:20}}>
+      <div style={{background:"white",borderRadius:16,padding:"40px 32px",maxWidth:420,textAlign:"center",boxShadow:"0 10px 40px rgba(0,0,0,.08)"}}>
+        <div style={{fontSize:42,marginBottom:12}}>⏳</div>
+        <div style={{fontWeight:700,fontSize:18,color:"#1a3a5c",marginBottom:8}}>Esperando aprobación del administrador</div>
+        <div style={{color:"#666",fontSize:14,lineHeight:1.5,marginBottom:20}}>
+          Tu cuenta (<strong>{session.user.email}</strong>) fue creada correctamente, pero todavía no tenés acceso a la Base de Compras.
+          Un administrador tiene que aprobarte primero.
+        </div>
+        <button onClick={()=>supabase.auth.signOut()} style={{background:"#f0f0f0",border:"none",borderRadius:8,padding:"9px 18px",cursor:"pointer",fontWeight:600,color:"#555",fontSize:13}}>Salir</button>
+      </div>
+    </div>
+  )
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -229,6 +257,27 @@ function Dashboard({ session, perfil }) {
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [])
+
+  // ── USUARIOS PENDIENTES DE APROBACIÓN (solo admin) ──────────────────────
+  const [pendientesCount, setPendientesCount] = useState(0)
+  const [showPendientes, setShowPendientes] = useState(false)
+
+  const fetchPendientesCount = async () => {
+    if (!isAdmin) { setPendientesCount(0); return }
+    const { count } = await supabase.from('perfiles').select('id', { count: 'exact', head: true }).eq('aprobado', false)
+    setPendientesCount(count || 0)
+  }
+  useEffect(() => { fetchPendientesCount() }, [isAdmin])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('perfiles-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'perfiles' }, () => {
+        fetchPendientesCount()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [isAdmin])
 
   useEffect(() => {
     const h = (e) => { if (exportRef.current && !exportRef.current.contains(e.target)) setShowExport(false) }
@@ -386,6 +435,14 @@ function Dashboard({ session, perfil }) {
           <button onClick={openAdd} style={{background:"#27ae60",color:"white",border:"none",borderRadius:8,padding:"8px 16px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             ＋ Nuevo
           </button>
+          {isAdmin && (
+            <button onClick={()=>setShowPendientes(true)} style={{position:"relative",background:"rgba(255,255,255,.1)",color:"white",border:"1px solid rgba(255,255,255,.25)",borderRadius:8,padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+              👥 Pendientes
+              {pendientesCount > 0 && (
+                <span style={{position:"absolute",top:-7,right:-7,background:"#e74c3c",color:"white",borderRadius:"50%",minWidth:18,height:18,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,padding:"0 3px"}}>{pendientesCount}</span>
+              )}
+            </button>
+          )}
           <button onClick={handleLogout} style={{background:"rgba(255,255,255,.1)",color:"white",border:"1px solid rgba(255,255,255,.25)",borderRadius:8,padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             Salir
           </button>
@@ -752,6 +809,11 @@ function Dashboard({ session, perfil }) {
       {/* MODAL DOCUMENTACIÓN APG */}
       {apgModal && (
         <ApgModal procedimiento={apgModal} session={session} onClose={()=>setApgModal(null)} />
+      )}
+
+      {/* MODAL USUARIOS PENDIENTES */}
+      {showPendientes && (
+        <UsuariosPendientesModal onClose={()=>setShowPendientes(false)} />
       )}
 
       {/* CONFIRM DELETE */}
