@@ -279,22 +279,22 @@ function Dashboard({ session, perfil }) {
   const diasDesde = (fechaStr) => fechaStr ? Math.floor((Date.now() - new Date(fechaStr).getTime()) / 86400000) : null
 
   const alertasPendientes = useMemo(() => {
-    return rows
+    return data
       .filter(r => r.estado === 'PENDIENTE DE INICIAR')
       .map(r => ({ ...r, dias: diasDesde(r.updated_at) }))
       .filter(r => r.dias !== null && r.dias >= UMBRAL_PENDIENTE_DIAS)
       .sort((a,b) => b.dias - a.dias)
-  }, [rows])
+  }, [data])
 
   const alertasApg = useMemo(() => {
-    return rows.map(r => {
+    return data.map(r => {
       const estadoApg = apgEstados[r.id]
       if (!estadoApg || estadoApg === 'COMPLETADO') return null
       const dias = diasDesde(apgUltimoCambio[apgTramiteIds[r.id]])
       if (dias === null || dias < UMBRAL_APG_ESTANCADO_DIAS) return null
       return { ...r, estadoApg, dias }
     }).filter(Boolean).sort((a,b) => b.dias - a.dias)
-  }, [rows, apgEstados, apgTramiteIds, apgUltimoCambio])
+  }, [data, apgEstados, apgTramiteIds, apgUltimoCambio])
 
   const totalAlertas = alertasPendientes.length + alertasApg.length
 
