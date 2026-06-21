@@ -237,16 +237,27 @@ function Dashboard({ session, perfil }) {
 
   // ── ESTADOS APG (Confección / Visto Bueno Contable / Firma Jefe / Completado) ──
   const [apgEstados, setApgEstados] = useState({}) // { [procedimiento_id]: estado_apg }
+  const [apgTramiteIds, setApgTramiteIds] = useState({}) // { [procedimiento_id]: tramite_id }
+  const [apgUltimoCambio, setApgUltimoCambio] = useState({}) // { [tramite_id]: fecha del último cambio de estado }
 
   const fetchApgEstados = async () => {
-    const { data, error } = await supabase.from('apg_tramite').select('procedimiento_id, estado_apg')
+    const { data, error } = await supabase.from('apg_tramite').select('id, procedimiento_id, estado_apg')
     if (!error) {
-      const map = {}
-      ;(data || []).forEach(r => { map[r.procedimiento_id] = r.estado_apg })
+      const map = {}, idMap = {}
+      ;(data || []).forEach(r => { map[r.procedimiento_id] = r.estado_apg; idMap[r.procedimiento_id] = r.id })
       setApgEstados(map)
+      setApgTramiteIds(idMap)
     }
   }
-  useEffect(() => { fetchApgEstados() }, [])
+  const fetchApgUltimoCambio = async () => {
+    const { data, error } = await supabase.from('apg_estado_historial').select('tramite_id, fecha').order('fecha', { ascending: false })
+    if (!error) {
+      const map = {}
+      ;(data || []).forEach(r => { if (!map[r.tramite_id]) map[r.tramite_id] = r.fecha })
+      setApgUltimoCambio(map)
+    }
+  }
+  useEffect(() => { fetchApgEstados(); fetchApgUltimoCambio() }, [])
 
   useEffect(() => {
     const channel = supabase
@@ -254,9 +265,38 @@ function Dashboard({ session, perfil }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'apg_tramite' }, () => {
         fetchApgEstados()
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'apg_estado_historial' }, () => {
+        fetchApgUltimoCambio()
+      })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [])
+
+  // ── NOTIFICACIONES: procedimientos estancados / trámites APG estancados ──
+  const [showNotificaciones, setShowNotificaciones] = useState(false)
+  const UMBRAL_PENDIENTE_DIAS = 15
+  const UMBRAL_APG_ESTANCADO_DIAS = 10
+  const diasDesde = (fechaStr) => fechaStr ? Math.floor((Date.now() - new Date(fechaStr).getTime()) / 86400000) : null
+
+  const alertasPendientes = useMemo(() => {
+    return rows
+      .filter(r => r.estado === 'PENDIENTE DE INICIAR')
+      .map(r => ({ ...r, dias: diasDesde(r.updated_at) }))
+      .filter(r => r.dias !== null && r.dias >= UMBRAL_PENDIENTE_DIAS)
+      .sort((a,b) => b.dias - a.dias)
+  }, [rows])
+
+  const alertasApg = useMemo(() => {
+    return rows.map(r => {
+      const estadoApg = apgEstados[r.id]
+      if (!estadoApg || estadoApg === 'COMPLETADO') return null
+      const dias = diasDesde(apgUltimoCambio[apgTramiteIds[r.id]])
+      if (dias === null || dias < UMBRAL_APG_ESTANCADO_DIAS) return null
+      return { ...r, estadoApg, dias }
+    }).filter(Boolean).sort((a,b) => b.dias - a.dias)
+  }, [rows, apgEstados, apgTramiteIds, apgUltimoCambio])
+
+  const totalAlertas = alertasPendientes.length + alertasApg.length
 
   // ── USUARIOS PENDIENTES DE APROBACIÓN (solo admin) ──────────────────────
   const [pendientesCount, setPendientesCount] = useState(0)
@@ -435,6 +475,43 @@ function Dashboard({ session, perfil }) {
           <button onClick={openAdd} style={{background:"#27ae60",color:"white",border:"none",borderRadius:8,padding:"8px 16px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             ＋ Nuevo
           </button>
+          <div style={{position:"relative"}}>
+            <button onClick={()=>setShowNotificaciones(s=>!s)} style={{position:"relative",background:"rgba(255,255,255,.1)",color:"white",border:"1px solid rgba(255,255,255,.25)",borderRadius:8,padding:"8px 12px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+              🔔
+              {totalAlertas > 0 && (
+                <span style={{position:"absolute",top:-7,right:-7,background:"#e74c3c",color:"white",borderRadius:"50%",minWidth:18,height:18,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,padding:"0 3px"}}>{totalAlertas}</span>
+              )}
+            </button>
+            {showNotificaciones && (
+              <div style={{position:"absolute",top:"110%",right:0,background:"white",borderRadius:12,boxShadow:"0 10px 40px rgba(0,0,0,.2)",width:340,maxHeight:420,overflowY:"auto",zIndex:200,color:"#333"}}>
+                <div style={{padding:"12px 16px",fontWeight:700,fontSize:13,color:"#1a3a5c",borderBottom:"1px solid #f0f0f0"}}>🔔 Notificaciones</div>
+                {totalAlertas === 0 ? (
+                  <div style={{padding:20,textAlign:"center",color:"#999",fontSize:13}}>Sin alertas por ahora ✅</div>
+                ) : (
+                  <>
+                    {alertasPendientes.map(r => (
+                      <div key={'p'+r.id} onClick={()=>{openView(r);setShowNotificaciones(false)}}
+                        style={{padding:"10px 16px",borderBottom:"1px solid #f8f8f8",cursor:"pointer"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"} onMouseLeave={e=>e.currentTarget.style.background="white"}>
+                        <div style={{fontSize:12,fontWeight:600,color:"#e67e22"}}>⏳ Pendiente de iniciar hace {r.dias} días</div>
+                        <div style={{fontSize:13,color:"#333",marginTop:2}}>{r.procedimiento} — {r.concepto}</div>
+                      </div>
+                    ))}
+                    {alertasApg.map(r => (
+                      <div key={'a'+r.id} onClick={()=>{setApgModal(r);setShowNotificaciones(false)}}
+                        style={{padding:"10px 16px",borderBottom:"1px solid #f8f8f8",cursor:"pointer"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"} onMouseLeave={e=>e.currentTarget.style.background="white"}>
+                        <div style={{fontSize:12,fontWeight:600,color:APG_ESTADO_BADGE[r.estadoApg]?.color}}>
+                          {APG_ESTADO_BADGE[r.estadoApg]?.icon} {APG_ESTADO_BADGE[r.estadoApg]?.label} hace {r.dias} días
+                        </div>
+                        <div style={{fontSize:13,color:"#333",marginTop:2}}>{r.procedimiento} — {r.concepto}</div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           {isAdmin && (
             <button onClick={()=>setShowPendientes(true)} style={{position:"relative",background:"rgba(255,255,255,.1)",color:"white",border:"1px solid rgba(255,255,255,.25)",borderRadius:8,padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
               👥 Pendientes
