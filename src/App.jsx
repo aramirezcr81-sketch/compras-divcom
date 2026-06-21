@@ -2,11 +2,23 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from './supabaseClient'
 import Login from './Login'
+import ApgModal from './ApgModal'
 
 const ESTADOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN","ADJUDICADO","SIN EFECTO","PENDIENTE DE INICIAR","ARCHIVADO"]
 const TIPOS = ["CD","CDA","CDE","CDNC","CPA","LA","LAA","LP","OTRO"]
 const ORIGENES = ["ANTERIOR 2026","TRÁMITE 2026","NO PAC PLANIFICADO"]
 const RUBROS = ["","PREVISIÓN","IMPREVISTOS"]
+// Estados que implican COMPROMISO presupuestal (procedimiento activo, aún no adjudicado).
+// El "AFECTADO" (devengado/encumbrance) se confirma recién cuando el estado pasa a ADJUDICADO,
+// conforme a las etapas de ejecución presupuestal del TOCAF (Asignado → Comprometido → Afectado).
+const ESTADOS_COMPROMETIDOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN"]
+const ANIO_PRESUPUESTO = 2026
+const APG_ESTADO_BADGE = {
+  CONFECCION: { color: "#2e75b6", icon: "📝", label: "Confección" },
+  VISTO_BUENO_CONTABLE: { color: "#e67e22", icon: "👀", label: "VB Contable" },
+  FIRMA_JEFE: { color: "#8e44ad", icon: "✍️", label: "Firma Jefe" },
+  COMPLETADO: { color: "#27ae60", icon: "✅", label: "Completado" },
+}
 
 const COLS_LABELS = {
   procedimiento:"N° PROCEDIMIENTO", tipo:"TIPO", concepto:"CONCEPTO", proveedor:"PROVEEDOR",
@@ -138,10 +150,18 @@ function Dashboard({ session, perfil }) {
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [confirmDel, setConfirmDel] = useState(null)
+  const [apgModal, setApgModal] = useState(null)
   const [showExport, setShowExport] = useState(false)
   const [saving, setSaving] = useState(false)
   const [errMsg, setErrMsg] = useState("")
   const exportRef = useRef(null)
+
+  // ── PRESUPUESTO 2026 ───────────────────────────────────────────────────
+  const [presupuesto, setPresupuesto] = useState(null)
+  const [loadingPresupuesto, setLoadingPresupuesto] = useState(true)
+  const [editPresupuesto, setEditPresupuesto] = useState(false)
+  const [presupuestoForm, setPresupuestoForm] = useState("")
+  const [savingPresupuesto, setSavingPresupuesto] = useState(false)
 
   const isAdmin = perfil?.rol === 'admin'
 
@@ -156,12 +176,55 @@ function Dashboard({ session, perfil }) {
 
   useEffect(() => { fetchData() }, [])
 
+  // Cargar presupuesto asignado 2026
+  const fetchPresupuesto = async () => {
+    setLoadingPresupuesto(true)
+    const { data, error } = await supabase.from('presupuesto_anual').select('*').eq('anio', ANIO_PRESUPUESTO).maybeSingle()
+    if (!error) setPresupuesto(data)
+    setLoadingPresupuesto(false)
+  }
+  useEffect(() => { fetchPresupuesto() }, [])
+
+  // Realtime: si otro usuario edita el presupuesto, se refleja para todos
+  useEffect(() => {
+    const channel = supabase
+      .channel('presupuesto-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'presupuesto_anual' }, () => {
+        fetchPresupuesto()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
+
   // Realtime: actualizar cuando otro usuario modifica datos
   useEffect(() => {
     const channel = supabase
       .channel('compras-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'compras' }, () => {
         fetchData()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
+
+  // ── ESTADOS APG (Confección / Visto Bueno Contable / Firma Jefe / Completado) ──
+  const [apgEstados, setApgEstados] = useState({}) // { [procedimiento_id]: estado_apg }
+
+  const fetchApgEstados = async () => {
+    const { data, error } = await supabase.from('apg_tramite').select('procedimiento_id, estado_apg')
+    if (!error) {
+      const map = {}
+      ;(data || []).forEach(r => { map[r.procedimiento_id] = r.estado_apg })
+      setApgEstados(map)
+    }
+  }
+  useEffect(() => { fetchApgEstados() }, [])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('apg-tramite-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'apg_tramite' }, () => {
+        fetchApgEstados()
       })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
@@ -192,6 +255,16 @@ function Dashboard({ session, perfil }) {
   const totalAPG = data.reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
   const porEstado = ESTADOS.reduce((acc,e) => { acc[e] = data.filter(r=>r.estado===e).length; return acc }, {})
   const porTipo = TIPOS.reduce((acc,t) => { acc[t] = data.filter(r=>r.tipo===t).length; return acc }, {})
+
+  // ── EJECUCIÓN PRESUPUESTAL (TOCAF): Asignado → Comprometido → Afectado ──
+  // COMPROMETIDO: procedimientos activos aún no resueltos (reserva preventiva de crédito).
+  // AFECTADO: procedimientos ADJUDICADOS (la afectación se confirma con la adjudicación).
+  const comprometido = data.filter(r => ESTADOS_COMPROMETIDOS.includes(r.estado)).reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
+  const afectado = data.filter(r => r.estado === "ADJUDICADO").reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
+  const montoAsignado = Number(presupuesto?.monto_asignado) || 0
+  const disponible = montoAsignado - comprometido - afectado
+  const pctAfectado = montoAsignado ? Math.min(100, (afectado/montoAsignado)*100) : 0
+  const pctComprometido = montoAsignado ? Math.min(100, 100 - pctAfectado, (comprometido/montoAsignado)*100) : 0
 
   const openAdd = () => { setForm(EMPTY_FORM); setErrMsg(""); setModal({mode:"add"}) }
   const openEdit = (r) => { setForm({...r}); setErrMsg(""); setModal({mode:"edit",record:r}) }
@@ -228,6 +301,30 @@ function Dashboard({ session, perfil }) {
   }
 
   const handleLogout = async () => { await supabase.auth.signOut() }
+
+  // ── Editar presupuesto asignado (solo admin) ─────────────────────────
+  const openEditPresupuesto = () => {
+    setPresupuestoForm(presupuesto?.monto_asignado != null ? String(presupuesto.monto_asignado) : "")
+    setErrMsg("")
+    setEditPresupuesto(true)
+  }
+  const savePresupuesto = async () => {
+    setSavingPresupuesto(true); setErrMsg("")
+    const monto = Number(presupuestoForm) || 0
+    if (presupuesto?.id) {
+      const { error } = await supabase.from('presupuesto_anual')
+        .update({ monto_asignado: monto, updated_by: session.user.id })
+        .eq('id', presupuesto.id)
+      if (error) { setErrMsg(error.message); setSavingPresupuesto(false); return }
+    } else {
+      const { error } = await supabase.from('presupuesto_anual')
+        .insert([{ anio: ANIO_PRESUPUESTO, monto_asignado: monto, updated_by: session.user.id }])
+      if (error) { setErrMsg(error.message); setSavingPresupuesto(false); return }
+    }
+    setSavingPresupuesto(false)
+    setEditPresupuesto(false)
+    fetchPresupuesto()
+  }
 
   const inp = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
   const sel = inp + " cursor-pointer"
@@ -319,14 +416,72 @@ function Dashboard({ session, perfil }) {
 
         {!loading && view === "resumen" && (
           <div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:16,marginBottom:20}}>
+            {/* ── PANEL PRESUPUESTO 2026 (Asignado → Comprometido → Afectado, TOCAF) ── */}
+            <div style={{background:"linear-gradient(135deg,#0d3b24,#117a65)",borderRadius:14,padding:"20px 24px",marginBottom:24,boxShadow:"0 4px 16px rgba(17,122,101,.25)",color:"white"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10,marginBottom:16}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,letterSpacing:.5}}>💼 EJECUCIÓN PRESUPUESTAL — EJERCICIO {ANIO_PRESUPUESTO}</div>
+                  <div style={{fontSize:11,opacity:.7,marginTop:3}}>Conforme a las etapas de ejecución del TOCAF: Asignado → Comprometido → Afectado</div>
+                </div>
+                {isAdmin && (
+                  <button onClick={openEditPresupuesto} style={{background:"rgba(255,255,255,.18)",border:"1px solid rgba(255,255,255,.35)",color:"white",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                    ✏️ Editar asignación
+                  </button>
+                )}
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:18,marginBottom:16}}>
+                <div>
+                  <div style={{fontSize:10,opacity:.75,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Asignado</div>
+                  <div style={{fontSize:20,fontWeight:700}}>{loadingPresupuesto ? "…" : fmt(montoAsignado)}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,opacity:.75,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Comprometido</div>
+                  <div style={{fontSize:20,fontWeight:700,color:"#ffd966"}}>{fmt(comprometido)}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,opacity:.75,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Afectado</div>
+                  <div style={{fontSize:20,fontWeight:700,color:"#ff9466"}}>{fmt(afectado)}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,opacity:.75,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Disponible</div>
+                  <div style={{fontSize:20,fontWeight:700,color:disponible<0?"#ff6b6b":"#7ee787"}}>{fmt(disponible)}</div>
+                </div>
+              </div>
+
+              <div style={{background:"rgba(255,255,255,.15)",borderRadius:8,height:14,overflow:"hidden",display:"flex"}}>
+                <div style={{width:`${pctAfectado}%`,background:"#ff9466"}} title={`Afectado: ${fmt(afectado)}`}/>
+                <div style={{width:`${pctComprometido}%`,background:"#ffd966"}} title={`Comprometido: ${fmt(comprometido)}`}/>
+              </div>
+              <div style={{display:"flex",gap:18,marginTop:9,fontSize:11,opacity:.9,flexWrap:"wrap"}}>
+                <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#ff9466",marginRight:5}}/>Afectado {montoAsignado?Math.round(pctAfectado):0}%</span>
+                <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#ffd966",marginRight:5}}/>Comprometido {montoAsignado?Math.round(pctComprometido):0}%</span>
+                {!loadingPresupuesto && !montoAsignado && <span style={{opacity:.8}}>⚠️ Todavía no se definió el presupuesto asignado {ANIO_PRESUPUESTO}{isAdmin ? " — hacé clic en \"Editar asignación\"" : ""}</span>}
+              </div>
+            </div>
+
+            {/* ── PROCEDIMIENTOS ── */}
+            <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:10}}>📁 Procedimientos</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16,marginBottom:24}}>
               {[
                 {label:"Total procedimientos",val:total,color:"#2e75b6",icon:"📁"},
-                {label:"Activos en trámite",val:activos,color:"#27ae60",icon:"🔄"},
                 {label:"Pendientes de iniciar",val:pendientes,color:"#e67e22",icon:"📌"},
+                {label:"Activos en trámite",val:activos,color:"#27ae60",icon:"🔄"},
                 {label:"Sin efecto / Archivados",val:sinEfecto,color:"#e74c3c",icon:"⛔"},
+              ].map((k,i) => (
+                <div key={i} style={{background:"white",borderRadius:12,padding:"16px 20px",boxShadow:"0 1px 4px rgba(0,0,0,.06)",borderLeft:`4px solid ${k.color}`}}>
+                  <div style={{fontSize:11,color:"#888",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{k.icon} {k.label}</div>
+                  <div style={{fontSize:22,fontWeight:700,color:k.color}}>{k.val}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* ── MONTOS GLOBALES (demanda total, no confundir con ejecución presupuestal de arriba) ── */}
+            <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:10}}>💰 Montos</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:16,marginBottom:20}}>
+              {[
                 {label:"Importe total compras",val:fmt(totalImporte),color:"#1a3a5c",icon:"💰"},
-                {label:"Total APG asignado",val:fmt(totalAPG),color:"#117a65",icon:"📈"},
+                {label:"Total APG solicitado",val:fmt(totalAPG),color:"#117a65",icon:"📈"},
               ].map((k,i) => (
                 <div key={i} style={{background:"white",borderRadius:12,padding:"16px 20px",boxShadow:"0 1px 4px rgba(0,0,0,.06)",borderLeft:`4px solid ${k.color}`}}>
                   <div style={{fontSize:11,color:"#888",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{k.icon} {k.label}</div>
@@ -337,6 +492,7 @@ function Dashboard({ session, perfil }) {
 
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:16}}>
               <div style={{background:"white",borderRadius:12,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+
                 <div style={{fontWeight:700,marginBottom:12,color:"#1a3a5c",fontSize:14}}>📊 Por estado</div>
                 {ESTADOS.filter(e=>porEstado[e]>0).map(e => {
                   const c = estadoColor(e)
@@ -445,6 +601,13 @@ function Dashboard({ session, perfil }) {
                             <div style={{display:"flex",gap:4}}>
                               <button onClick={()=>openView(r)} title="Ver" style={{background:"#e8f0fe",border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>👁</button>
                               <button onClick={()=>openEdit(r)} title="Editar" style={{background:"#e8f8f0",border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>✏️</button>
+                              <button onClick={()=>setApgModal(r)} title="Documentación APG" style={{background:"#f3e8fd",border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>📑</button>
+                              {apgEstados[r.id] && (
+                                <span title={`APG: ${APG_ESTADO_BADGE[apgEstados[r.id]]?.label}`} style={{
+                                  background: APG_ESTADO_BADGE[apgEstados[r.id]]?.color, color:"white", borderRadius:6,
+                                  padding:"4px 6px", fontSize:10, fontWeight:600, whiteSpace:"nowrap",
+                                }}>{APG_ESTADO_BADGE[apgEstados[r.id]]?.icon}</span>
+                              )}
                               {isAdmin && <button onClick={()=>setConfirmDel(r)} title="Eliminar" style={{background:"#fde8e8",border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>🗑</button>}
                             </div>
                           </td>
@@ -550,12 +713,46 @@ function Dashboard({ session, perfil }) {
               </div>
               <div style={{padding:"0 24px 24px",display:"flex",gap:10,justifyContent:"flex-end"}}>
                 <button onClick={()=>setModal(null)} style={{background:"#f0f0f0",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:600,color:"#555",fontSize:13}}>Cerrar</button>
+                <button onClick={()=>{setModal(null);setApgModal(r)}} style={{background:"#8e44ad",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:600,color:"white",fontSize:13}}>📑 Documentación APG</button>
                 <button onClick={()=>openEdit(r)} style={{background:"#2e75b6",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:600,color:"white",fontSize:13}}>✏️ Editar</button>
               </div>
             </div>
           </div>
         )
       })()}
+
+      {/* MODAL PRESUPUESTO ASIGNADO */}
+      {editPresupuesto && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}}>
+          <div style={{background:"white",borderRadius:16,width:"100%",maxWidth:420,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+            <div style={{background:"linear-gradient(135deg,#0d3b24,#117a65)",padding:"18px 24px",borderRadius:"16px 16px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{color:"white",fontWeight:700,fontSize:15}}>💼 Presupuesto Asignado {ANIO_PRESUPUESTO}</span>
+              <button onClick={()=>setEditPresupuesto(false)} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:16}}>✕</button>
+            </div>
+            <div style={{padding:24}}>
+              <label style={{fontSize:11,fontWeight:600,color:"#555",textTransform:"uppercase",letterSpacing:.5,display:"block",marginBottom:6}}>Monto asignado ($)</label>
+              <input type="number" value={presupuestoForm} onChange={e=>setPresupuestoForm(e.target.value)}
+                style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 12px",fontSize:14,boxSizing:"border-box"}} autoFocus/>
+              <div style={{fontSize:11,color:"#999",marginTop:10,lineHeight:1.5}}>
+                Crédito presupuestal total habilitado para la División Comercial en el ejercicio {ANIO_PRESUPUESTO}.
+                Comprometido y Afectado se calculan automáticamente según el estado de cada procedimiento.
+              </div>
+            </div>
+            {errMsg && <div style={{padding:"0 24px",color:"#c0392b",fontSize:12}}>⚠️ {errMsg}</div>}
+            <div style={{padding:"16px 24px 24px",display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button onClick={()=>setEditPresupuesto(false)} style={{background:"#f0f0f0",border:"none",borderRadius:8,padding:"9px 18px",cursor:"pointer",fontWeight:600,color:"#555",fontSize:13}}>Cancelar</button>
+              <button onClick={savePresupuesto} disabled={savingPresupuesto} style={{background:"#117a65",border:"none",borderRadius:8,padding:"9px 18px",cursor:"pointer",fontWeight:600,color:"white",fontSize:13}}>
+                {savingPresupuesto ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DOCUMENTACIÓN APG */}
+      {apgModal && (
+        <ApgModal procedimiento={apgModal} session={session} onClose={()=>setApgModal(null)} />
+      )}
 
       {/* CONFIRM DELETE */}
       {confirmDel && (
