@@ -664,39 +664,29 @@ function Dashboard({ session, perfil }) {
                 <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#ffd966",marginRight:5}}/>Comprometido {montoAsignado?Math.round(pctComprometido):0}%</span>
                 {!loadingPresupuesto && !montoAsignado && <span style={{opacity:.8}}>⚠️ Todavía no se definió el presupuesto asignado {ANIO_PRESUPUESTO}{isAdmin ? " — hacé clic en \"Editar asignación\"" : ""}</span>}
               </div>
-            </div>
 
-            {/* ── PROYECCIÓN PRESUPUESTAL — AÑOS FUTUROS (según APGs cargadas) ── */}
-            <div style={{background:"white",borderRadius:14,padding:"20px 24px",marginBottom:24,boxShadow:"0 1px 4px rgba(0,0,0,.06)",border:"1px solid #e2e8f0"}}>
-              <div style={{marginBottom:14}}>
-                <div style={{fontSize:12,fontWeight:700,color:"#1a3a5c",letterSpacing:.5}}>📅 PROYECCIÓN PRESUPUESTAL — AÑOS FUTUROS</div>
-                <div style={{fontSize:11,color:"#888",marginTop:3}}>
-                  Devengamiento previsto en ejercicios posteriores a {ANIO_PRESUPUESTO}, calculado a partir de las APG ya cargadas con distribución por año (cantidad × precio × IVA × cotización × variación, según corresponda a cada año)
-                </div>
-              </div>
-
-              {loadingProyeccion ? (
-                <div style={{color:"#999",fontSize:13,padding:"6px 0"}}>Cargando...</div>
-              ) : aniosFuturos.length === 0 ? (
-                <div style={{color:"#999",fontSize:13,padding:"6px 0"}}>
-                  Todavía no hay procedimientos con APG cargada que prevean montos para años posteriores a {ANIO_PRESUPUESTO}.
-                </div>
-              ) : (
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14,marginBottom:4}}>
-                  {aniosFuturos.map(anio => (
-                    <div key={anio} style={{background:"#f7faff",borderRadius:10,padding:"14px 16px",borderLeft:"4px solid #2e75b6"}}>
-                      <div style={{fontSize:11,color:"#888",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{anio}</div>
-                      <div style={{fontSize:19,fontWeight:700,color:"#1a3a5c"}}>{fmt(proyeccionFutura[anio].monto)}</div>
-                      <div style={{fontSize:11,color:"#999",marginTop:3}}>
-                        {proyeccionFutura[anio].procedimientos.size} procedimiento{proyeccionFutura[anio].procedimientos.size!==1?"s":""}
+              {/* ── Previsiones presupuestales (años posteriores, según APGs ya cargadas) ── */}
+              <div style={{marginTop:18,paddingTop:14,borderTop:"1px solid rgba(255,255,255,.18)"}}>
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:.5,opacity:.85,marginBottom:10}}>📅 Previsiones presupuestales</div>
+                {loadingProyeccion ? (
+                  <div style={{fontSize:12,opacity:.7}}>Cargando...</div>
+                ) : aniosFuturos.length === 0 ? (
+                  <div style={{fontSize:12,opacity:.7}}>Todavía no hay APG cargadas con monto previsto para años posteriores a {ANIO_PRESUPUESTO}.</div>
+                ) : (
+                  <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+                    {aniosFuturos.map(anio => (
+                      <div key={anio} style={{background:"rgba(255,255,255,.12)",borderRadius:8,padding:"10px 16px",minWidth:130}}>
+                        <div style={{fontSize:10,opacity:.75,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Año {anio}</div>
+                        <div style={{fontSize:17,fontWeight:700,color:"#ffd966"}}>{fmt(proyeccionFutura[anio].monto)}</div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div style={{fontSize:11,color:"#aaa",marginTop:14,paddingTop:10,borderTop:"1px solid #f0f0f0",lineHeight:1.5}}>
-                ⚠️ Proyección parcial: solo incluye los {procedimientosConApgPlurianual} de {total} procedimientos que ya tienen una APG cargada con distribución por año. No incluye las previsiones del PAC (Plan Anual de Compras) todavía.
+                    ))}
+                  </div>
+                )}
+                {!loadingProyeccion && (
+                  <div style={{fontSize:10,opacity:.6,marginTop:8}}>
+                    Según {procedimientosConApgPlurianual} de {total} procedimientos con distribución por año cargada · no incluye el PAC
+                  </div>
+                )}
               </div>
             </div>
 
