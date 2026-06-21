@@ -423,12 +423,15 @@ function Dashboard({ session, perfil }) {
     {id:"todos",label:"📋 Todos"},
     {id:"activos",label:"🔄 Activos"},
     {id:"pendientes",label:"📌 Pendientes"},
+    {id:"archivados",label:"⛔ Archivados"},
   ]
 
   const tableData = view === "activos"
     ? filtered.filter(r => !["SIN EFECTO","ARCHIVADO","PENDIENTE DE INICIAR"].includes(r.estado))
     : view === "pendientes"
     ? filtered.filter(r => r.estado === "PENDIENTE DE INICIAR" || r.origen === "NO PAC PLANIFICADO")
+    : view === "archivados"
+    ? filtered.filter(r => ["SIN EFECTO","ARCHIVADO"].includes(r.estado))
     : filtered
 
   const today = new Date().toLocaleDateString('es-UY').replace(/\//g,"-")
@@ -598,12 +601,15 @@ function Dashboard({ session, perfil }) {
             <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:10}}>📁 Procedimientos</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16,marginBottom:24}}>
               {[
-                {label:"Total procedimientos",val:total,color:"#2e75b6",icon:"📁"},
-                {label:"Pendientes de iniciar",val:pendientes,color:"#e67e22",icon:"📌"},
-                {label:"Activos en trámite",val:activos,color:"#27ae60",icon:"🔄"},
-                {label:"Sin efecto / Archivados",val:sinEfecto,color:"#e74c3c",icon:"⛔"},
+                {label:"Total procedimientos",val:total,color:"#2e75b6",icon:"📁",targetView:"todos"},
+                {label:"Pendientes de iniciar",val:pendientes,color:"#e67e22",icon:"📌",targetView:"pendientes"},
+                {label:"Activos en trámite",val:activos,color:"#27ae60",icon:"🔄",targetView:"activos"},
+                {label:"Sin efecto / Archivados",val:sinEfecto,color:"#e74c3c",icon:"⛔",targetView:"archivados"},
               ].map((k,i) => (
-                <div key={i} style={{background:"white",borderRadius:12,padding:"16px 20px",boxShadow:"0 1px 4px rgba(0,0,0,.06)",borderLeft:`4px solid ${k.color}`}}>
+                <div key={i} onClick={()=>setView(k.targetView)}
+                  style={{background:"white",borderRadius:12,padding:"16px 20px",boxShadow:"0 1px 4px rgba(0,0,0,.06)",borderLeft:`4px solid ${k.color}`,cursor:"pointer",transition:"transform .12s, box-shadow .12s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 6px 16px rgba(0,0,0,.12)"}}
+                  onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{fontSize:11,color:"#888",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{k.icon} {k.label}</div>
                   <div style={{fontSize:22,fontWeight:700,color:k.color}}>{k.val}</div>
                 </div>
