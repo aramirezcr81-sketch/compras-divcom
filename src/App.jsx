@@ -4,6 +4,7 @@ import { supabase } from './supabaseClient'
 import Login from './Login'
 import ApgModal from './ApgModal'
 import UsuariosPendientesModal from './UsuariosPendientesModal'
+import { yearTotalPesos } from './apgCalc'
 
 const ESTADOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN","ADJUDICADO","SIN EFECTO","PENDIENTE DE INICIAR","ARCHIVADO"]
 const TIPOS = ["CD","CDA","CDE","CDNC","CPA","LA","LAA","LP","OTRO"]
@@ -13,6 +14,9 @@ const RUBROS = ["","PREVISIÓN","IMPREVISTOS"]
 // El "AFECTADO" (devengado/encumbrance) se confirma recién cuando el estado pasa a ADJUDICADO,
 // conforme a las etapas de ejecución presupuestal del TOCAF (Asignado → Comprometido → Afectado).
 const ESTADOS_COMPROMETIDOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN"]
+// Estados a incluir en la proyección plurianual: lo mismo que cuenta como Comprometido/Afectado hoy.
+// Se excluyen PENDIENTE DE INICIAR (todavía no es un compromiso real), SIN EFECTO y ARCHIVADO.
+const ESTADOS_PROYECTABLES = [...ESTADOS_COMPROMETIDOS, "ADJUDICADO"]
 const ANIO_PRESUPUESTO = 2026
 const APG_ESTADO_BADGE = {
   CONFECCION: { color: "#2e75b6", icon: "📝", label: "Confección" },
@@ -272,6 +276,30 @@ function Dashboard({ session, perfil }) {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
+  // ── PROYECCIÓN PRESUPUESTAL PLURIANUAL (según APGs cargadas con distribución por año) ──
+  const [apgTramitesFull, setApgTramitesFull] = useState([])
+  const [loadingProyeccion, setLoadingProyeccion] = useState(true)
+
+  const fetchApgTramitesFull = async () => {
+    setLoadingProyeccion(true)
+    const { data, error } = await supabase
+      .from('apg_tramite')
+      .select('procedimiento_id, moneda, cotizacion_ur, pct_variacion_cambio, apg_items(precio_unitario_ur, iva_pct, apg_items_anios(anio, cantidad))')
+    if (!error) setApgTramitesFull(data || [])
+    setLoadingProyeccion(false)
+  }
+  useEffect(() => { fetchApgTramitesFull() }, [])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('apg-proyeccion-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'apg_items' }, () => fetchApgTramitesFull())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'apg_items_anios' }, () => fetchApgTramitesFull())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'apg_tramite' }, () => fetchApgTramitesFull())
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
+
   // ── NOTIFICACIONES: procedimientos estancados / trámites APG estancados ──
   const [showNotificaciones, setShowNotificaciones] = useState(false)
   const UMBRAL_PENDIENTE_DIAS = 15
@@ -354,6 +382,47 @@ function Dashboard({ session, perfil }) {
   const disponible = montoAsignado - comprometido - afectado
   const pctAfectado = montoAsignado ? Math.min(100, (afectado/montoAsignado)*100) : 0
   const pctComprometido = montoAsignado ? Math.min(100, 100 - pctAfectado, (comprometido/montoAsignado)*100) : 0
+
+  // ── PROYECCIÓN AÑOS FUTUROS: suma, por año posterior a ANIO_PRESUPUESTO, el monto en $
+  // que ya quedó calculado en cada APG cargada (cantidad × precio × IVA × cotización × variación).
+  // Solo entran procedimientos en estados "vivos" (mismo criterio que Comprometido/Afectado).
+  const procedimientosProyectablesIds = useMemo(
+    () => new Set(data.filter(r => ESTADOS_PROYECTABLES.includes(r.estado)).map(r => r.id)),
+    [data]
+  )
+
+  const proyeccionFutura = useMemo(() => {
+    const porAnio = {} // { anio: { monto, procedimientos: Set<id> } }
+    apgTramitesFull.forEach(t => {
+      if (!procedimientosProyectablesIds.has(t.procedimiento_id)) return
+      const items = (t.apg_items || []).map(it => {
+        const anios = {}
+        ;(it.apg_items_anios || []).forEach(ay => { anios[ay.anio] = ay.cantidad })
+        return { precio_unitario_ur: it.precio_unitario_ur, iva_pct: it.iva_pct, anios }
+      })
+      const aniosSet = new Set()
+      items.forEach(it => Object.keys(it.anios).forEach(a => aniosSet.add(Number(a))))
+      const cotizacionEfectiva = t.moneda === "PESOS" ? 1 : (Number(t.cotizacion_ur) || 0)
+      aniosSet.forEach(anio => {
+        if (anio <= ANIO_PRESUPUESTO) return
+        const monto = yearTotalPesos(items, anio, cotizacionEfectiva, t.pct_variacion_cambio)
+        if (!porAnio[anio]) porAnio[anio] = { monto: 0, procedimientos: new Set() }
+        porAnio[anio].monto += monto
+        porAnio[anio].procedimientos.add(t.procedimiento_id)
+      })
+    })
+    return porAnio
+  }, [apgTramitesFull, procedimientosProyectablesIds])
+
+  const aniosFuturos = Object.keys(proyeccionFutura).map(Number).sort((a,b)=>a-b)
+
+  const procedimientosConApgPlurianual = useMemo(
+    () => new Set(apgTramitesFull
+      .filter(t => (t.apg_items||[]).some(it => (it.apg_items_anios||[]).length > 0))
+      .map(t => t.procedimiento_id)
+    ).size,
+    [apgTramitesFull]
+  )
 
   const openAdd = () => { setForm(EMPTY_FORM); setErrMsg(""); setModal({mode:"add"}) }
   const openEdit = (r) => { setForm({...r}); setErrMsg(""); setModal({mode:"edit",record:r}) }
@@ -594,6 +663,40 @@ function Dashboard({ session, perfil }) {
                 <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#ff9466",marginRight:5}}/>Afectado {montoAsignado?Math.round(pctAfectado):0}%</span>
                 <span><span style={{display:"inline-block",width:8,height:8,borderRadius:2,background:"#ffd966",marginRight:5}}/>Comprometido {montoAsignado?Math.round(pctComprometido):0}%</span>
                 {!loadingPresupuesto && !montoAsignado && <span style={{opacity:.8}}>⚠️ Todavía no se definió el presupuesto asignado {ANIO_PRESUPUESTO}{isAdmin ? " — hacé clic en \"Editar asignación\"" : ""}</span>}
+              </div>
+            </div>
+
+            {/* ── PROYECCIÓN PRESUPUESTAL — AÑOS FUTUROS (según APGs cargadas) ── */}
+            <div style={{background:"white",borderRadius:14,padding:"20px 24px",marginBottom:24,boxShadow:"0 1px 4px rgba(0,0,0,.06)",border:"1px solid #e2e8f0"}}>
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:12,fontWeight:700,color:"#1a3a5c",letterSpacing:.5}}>📅 PROYECCIÓN PRESUPUESTAL — AÑOS FUTUROS</div>
+                <div style={{fontSize:11,color:"#888",marginTop:3}}>
+                  Devengamiento previsto en ejercicios posteriores a {ANIO_PRESUPUESTO}, calculado a partir de las APG ya cargadas con distribución por año (cantidad × precio × IVA × cotización × variación, según corresponda a cada año)
+                </div>
+              </div>
+
+              {loadingProyeccion ? (
+                <div style={{color:"#999",fontSize:13,padding:"6px 0"}}>Cargando...</div>
+              ) : aniosFuturos.length === 0 ? (
+                <div style={{color:"#999",fontSize:13,padding:"6px 0"}}>
+                  Todavía no hay procedimientos con APG cargada que prevean montos para años posteriores a {ANIO_PRESUPUESTO}.
+                </div>
+              ) : (
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14,marginBottom:4}}>
+                  {aniosFuturos.map(anio => (
+                    <div key={anio} style={{background:"#f7faff",borderRadius:10,padding:"14px 16px",borderLeft:"4px solid #2e75b6"}}>
+                      <div style={{fontSize:11,color:"#888",textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{anio}</div>
+                      <div style={{fontSize:19,fontWeight:700,color:"#1a3a5c"}}>{fmt(proyeccionFutura[anio].monto)}</div>
+                      <div style={{fontSize:11,color:"#999",marginTop:3}}>
+                        {proyeccionFutura[anio].procedimientos.size} procedimiento{proyeccionFutura[anio].procedimientos.size!==1?"s":""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{fontSize:11,color:"#aaa",marginTop:14,paddingTop:10,borderTop:"1px solid #f0f0f0",lineHeight:1.5}}>
+                ⚠️ Proyección parcial: solo incluye los {procedimientosConApgPlurianual} de {total} procedimientos que ya tienen una APG cargada con distribución por año. No incluye las previsiones del PAC (Plan Anual de Compras) todavía.
               </div>
             </div>
 
