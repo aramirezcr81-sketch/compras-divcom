@@ -12,6 +12,13 @@ const ORIGENES = ["ANTERIOR 2026","TRÁMITE 2026","NO PAC PLANIFICADO"]
 const RUBROS = ["","PREVISIÓN","IMPREVISTOS"]
 const ESTADOS_COMPROMETIDOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN"]
 const ESTADOS_PROYECTABLES = [...ESTADOS_COMPROMETIDOS, "ADJUDICADO"]
+// Funciones para comparar estados con texto libre (el campo puede tener texto adicional)
+const estadoIncluyeAlguno = (estado, lista) => lista.some(e => (estado||"").toUpperCase().includes(e.toUpperCase()))
+const esComprometido = (estado) => estadoIncluyeAlguno(estado, ESTADOS_COMPROMETIDOS)
+const esProyectable = (estado) => estadoIncluyeAlguno(estado, ESTADOS_PROYECTABLES)
+const esAdjudicado = (estado) => (estado||"").toUpperCase().includes("ADJUDICADO")
+const esSinEfecto = (estado) => (estado||"").toUpperCase().includes("SIN EFECTO") || (estado||"").toUpperCase().includes("ARCHIVADO")
+const esPendiente = (estado) => (estado||"").toUpperCase().includes("PENDIENTE")
 const ANIO_PRESUPUESTO = 2026
 const APG_ESTADO_BADGE = {
   CONFECCION: { color: "#2e75b6", icon: "📝", label: "Confección" },
@@ -76,9 +83,9 @@ function exportToExcel(rows, filename) {
     ["RESUMEN EJECUTIVO"], [],
     ["KPI","VALOR"],
     ["Total procedimientos", rows.length],
-    ["Activos en trámite", rows.filter(r=>!["SIN EFECTO","ARCHIVADO","PENDIENTE DE INICIAR"].includes(r.estado)).length],
-    ["Pendientes de iniciar", rows.filter(r=>r.estado==="PENDIENTE DE INICIAR").length],
-    ["Sin efecto / Archivados", rows.filter(r=>["SIN EFECTO","ARCHIVADO"].includes(r.estado)).length],
+    ["Activos en trámite", rows.filter(r=>!esSinEfecto(r.estado) && !esPendiente(r.estado)).length],
+    ["Pendientes de iniciar", rows.filter(r=>esPendiente(r.estado)).length],
+    ["Sin efecto / Archivados", rows.filter(r=>esSinEfecto(r.estado)).length],
     ["Importe total ($)", totalImporte],
     ["Total APG asignado ($)", totalAPG],
     [],
@@ -291,7 +298,7 @@ function Dashboard({ session, perfil }) {
 
   const alertasPendientes = useMemo(() => {
     return data
-      .filter(r => r.estado === 'PENDIENTE DE INICIAR')
+      .filter(r => esPendiente(r.estado))
       .map(r => ({ ...r, dias: diasDesde(r.updated_at) }))
       .filter(r => r.dias !== null && r.dias >= UMBRAL_PENDIENTE_DIAS)
       .sort((a,b) => b.dias - a.dias)
@@ -347,23 +354,23 @@ function Dashboard({ session, perfil }) {
   }, [data, search, filterTipo, filterEstado, filterOrigen, filterRubro])
 
   const total = data.length
-  const activos = data.filter(r => !["SIN EFECTO","ARCHIVADO","PENDIENTE DE INICIAR"].includes(r.estado)).length
-  const pendientes = data.filter(r => r.estado === "PENDIENTE DE INICIAR").length
-  const sinEfecto = data.filter(r => ["SIN EFECTO","ARCHIVADO"].includes(r.estado)).length
+  const activos = data.filter(r => !esSinEfecto(r.estado) && !esPendiente(r.estado)).length
+  const pendientes = data.filter(r => esPendiente(r.estado)).length
+  const sinEfecto = data.filter(r => esSinEfecto(r.estado)).length
   const totalImporte = data.reduce((s,r) => s + (Number(r.importe)||0), 0)
   const totalAPG = data.reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
   const porEstado = ESTADOS.reduce((acc,e) => { acc[e] = data.filter(r=>r.estado===e).length; return acc }, {})
   const porTipo = TIPOS.reduce((acc,t) => { acc[t] = data.filter(r=>r.tipo===t).length; return acc }, {})
 
-  const comprometido = data.filter(r => ESTADOS_COMPROMETIDOS.includes(r.estado)).reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
-  const afectado = data.filter(r => r.estado === "ADJUDICADO").reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
+  const comprometido = data.filter(r => esComprometido(r.estado)).reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
+  const afectado = data.filter(r => esAdjudicado(r.estado)).reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
   const montoAsignado = Number(presupuesto?.monto_asignado) || 0
   const disponible = montoAsignado - comprometido - afectado
   const pctAfectado = montoAsignado ? Math.min(100, (afectado/montoAsignado)*100) : 0
   const pctComprometido = montoAsignado ? Math.min(100, 100 - pctAfectado, (comprometido/montoAsignado)*100) : 0
 
   const procedimientosProyectablesIds = useMemo(
-    () => new Set(data.filter(r => ESTADOS_PROYECTABLES.includes(r.estado)).map(r => r.id)),
+    () => new Set(data.filter(r => esProyectable(r.estado)).map(r => r.id)),
     [data]
   )
 
@@ -471,11 +478,11 @@ function Dashboard({ session, perfil }) {
   ]
 
   const tableData = view === "activos"
-    ? filtered.filter(r => !["SIN EFECTO","ARCHIVADO","PENDIENTE DE INICIAR"].includes(r.estado))
+    ? filtered.filter(r => !esSinEfecto(r.estado) && !esPendiente(r.estado))
     : view === "pendientes"
-    ? filtered.filter(r => r.estado === "PENDIENTE DE INICIAR" || r.origen === "NO PAC PLANIFICADO")
+    ? filtered.filter(r => esPendiente(r.estado) || r.origen === "NO PAC PLANIFICADO")
     : view === "archivados"
-    ? filtered.filter(r => ["SIN EFECTO","ARCHIVADO"].includes(r.estado))
+    ? filtered.filter(r => esSinEfecto(r.estado))
     : filtered
 
   const today = new Date().toLocaleDateString('es-UY').replace(/\//g,"-")
