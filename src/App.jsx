@@ -651,7 +651,6 @@ function Dashboard({ session, perfil }) {
               <div style={{marginTop:18,paddingTop:14,borderTop:"1px solid rgba(255,255,255,.18)"}}>
                 <div style={{marginBottom:10}}>
                   <div style={{fontSize:11,fontWeight:700,letterSpacing:.5,opacity:.85}}>📅 Previsiones presupuestales</div>
-                  <div style={{fontSize:10,opacity:.6,marginTop:3}}>Impacto estimado en presupuestos futuros según APGs vigentes</div>
                 </div>
                 {loadingProyeccion ? (
                   <div style={{fontSize:12,opacity:.7}}>Cargando...</div>
