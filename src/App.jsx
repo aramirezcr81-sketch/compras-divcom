@@ -10,12 +10,7 @@ const ESTADOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN","ADJUDICADO","SIN EFEC
 const TIPOS = ["CD","CDA","CDE","CDNC","CPA","LA","LAA","LP","OTRO"]
 const ORIGENES = ["ANTERIOR 2026","TRÁMITE 2026","NO PAC PLANIFICADO"]
 const RUBROS = ["","PREVISIÓN","IMPREVISTOS"]
-// Estados que implican COMPROMISO presupuestal (procedimiento activo, aún no adjudicado).
-// El "AFECTADO" (devengado/encumbrance) se confirma recién cuando el estado pasa a ADJUDICADO,
-// conforme a las etapas de ejecución presupuestal del TOCAF (Asignado → Comprometido → Afectado).
 const ESTADOS_COMPROMETIDOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN"]
-// Estados a incluir en la proyección plurianual: lo mismo que cuenta como Comprometido/Afectado hoy.
-// Se excluyen PENDIENTE DE INICIAR (todavía no es un compromiso real), SIN EFECTO y ARCHIVADO.
 const ESTADOS_PROYECTABLES = [...ESTADOS_COMPROMETIDOS, "ADJUDICADO"]
 const ANIO_PRESUPUESTO = 2026
 const APG_ESTADO_BADGE = {
@@ -54,7 +49,6 @@ const rubroColor = (r) => {
 
 const EMPTY_FORM = {procedimiento:"",tipo:"CDA",concepto:"",proveedor:"",importe:"",periodo:"",anios_apg:"",rubro_apg:"",importe_apg:"",estado:"EN TRÁMITE",fecha_apertura:"",ultimo_control:"",mdn_tcr:"",sin_efecto:"",observacion:"",origen:"TRÁMITE 2026",pac:"NO PAC"}
 
-// ── EXPORT FUNCTIONS ──────────────────────────────────────────────────────────
 function exportToExcel(rows, filename) {
   const headers = Object.values(COLS_LABELS)
   const keys = Object.keys(COLS_LABELS)
@@ -110,7 +104,6 @@ function exportToCSV(rows, filename) {
   URL.revokeObjectURL(url)
 }
 
-// ════════════════════════════════════════════════════════════════════════════
 export default function App() {
   const [session, setSession] = useState(null)
   const [perfil, setPerfil] = useState(null)
@@ -152,7 +145,6 @@ export default function App() {
   return <Dashboard session={session} perfil={perfil} />
 }
 
-// ════════════════════════════════════════════════════════════════════════════
 function EsperandoAprobacion({ session }) {
   return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",fontFamily:"sans-serif",background:"#f4f6f9",padding:20}}>
@@ -169,7 +161,6 @@ function EsperandoAprobacion({ session }) {
   )
 }
 
-// ════════════════════════════════════════════════════════════════════════════
 function Dashboard({ session, perfil }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
@@ -188,7 +179,6 @@ function Dashboard({ session, perfil }) {
   const [errMsg, setErrMsg] = useState("")
   const exportRef = useRef(null)
 
-  // ── PRESUPUESTO 2026 ───────────────────────────────────────────────────
   const [presupuesto, setPresupuesto] = useState(null)
   const [loadingPresupuesto, setLoadingPresupuesto] = useState(true)
   const [editPresupuesto, setEditPresupuesto] = useState(false)
@@ -197,7 +187,6 @@ function Dashboard({ session, perfil }) {
 
   const isAdmin = perfil?.rol === 'admin'
 
-  // Cargar datos
   const fetchData = async () => {
     setLoading(true)
     const { data, error } = await supabase.from('compras').select('*').order('created_at', { ascending: false })
@@ -208,7 +197,6 @@ function Dashboard({ session, perfil }) {
 
   useEffect(() => { fetchData() }, [])
 
-  // Cargar presupuesto asignado 2026
   const fetchPresupuesto = async () => {
     setLoadingPresupuesto(true)
     const { data, error } = await supabase.from('presupuesto_anual').select('*').eq('anio', ANIO_PRESUPUESTO).maybeSingle()
@@ -217,7 +205,6 @@ function Dashboard({ session, perfil }) {
   }
   useEffect(() => { fetchPresupuesto() }, [])
 
-  // Realtime: si otro usuario edita el presupuesto, se refleja para todos
   useEffect(() => {
     const channel = supabase
       .channel('presupuesto-changes')
@@ -228,7 +215,6 @@ function Dashboard({ session, perfil }) {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  // Realtime: actualizar cuando otro usuario modifica datos
   useEffect(() => {
     const channel = supabase
       .channel('compras-changes')
@@ -239,10 +225,9 @@ function Dashboard({ session, perfil }) {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  // ── ESTADOS APG (Confección / Visto Bueno Contable / Firma Jefe / Completado) ──
-  const [apgEstados, setApgEstados] = useState({}) // { [procedimiento_id]: estado_apg }
-  const [apgTramiteIds, setApgTramiteIds] = useState({}) // { [procedimiento_id]: tramite_id }
-  const [apgUltimoCambio, setApgUltimoCambio] = useState({}) // { [tramite_id]: fecha del último cambio de estado }
+  const [apgEstados, setApgEstados] = useState({})
+  const [apgTramiteIds, setApgTramiteIds] = useState({})
+  const [apgUltimoCambio, setApgUltimoCambio] = useState({})
 
   const fetchApgEstados = async () => {
     const { data, error } = await supabase.from('apg_tramite').select('id, procedimiento_id, estado_apg')
@@ -276,7 +261,6 @@ function Dashboard({ session, perfil }) {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  // ── PROYECCIÓN PRESUPUESTAL PLURIANUAL (según APGs cargadas con distribución por año) ──
   const [apgTramitesFull, setApgTramitesFull] = useState([])
   const [loadingProyeccion, setLoadingProyeccion] = useState(true)
 
@@ -300,7 +284,6 @@ function Dashboard({ session, perfil }) {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  // ── NOTIFICACIONES: procedimientos estancados / trámites APG estancados ──
   const [showNotificaciones, setShowNotificaciones] = useState(false)
   const UMBRAL_PENDIENTE_DIAS = 15
   const UMBRAL_APG_ESTANCADO_DIAS = 10
@@ -326,7 +309,6 @@ function Dashboard({ session, perfil }) {
 
   const totalAlertas = alertasPendientes.length + alertasApg.length
 
-  // ── USUARIOS PENDIENTES DE APROBACIÓN (solo admin) ──────────────────────
   const [pendientesCount, setPendientesCount] = useState(0)
   const [showPendientes, setShowPendientes] = useState(false)
 
@@ -373,9 +355,6 @@ function Dashboard({ session, perfil }) {
   const porEstado = ESTADOS.reduce((acc,e) => { acc[e] = data.filter(r=>r.estado===e).length; return acc }, {})
   const porTipo = TIPOS.reduce((acc,t) => { acc[t] = data.filter(r=>r.tipo===t).length; return acc }, {})
 
-  // ── EJECUCIÓN PRESUPUESTAL (TOCAF): Asignado → Comprometido → Afectado ──
-  // COMPROMETIDO: procedimientos activos aún no resueltos (reserva preventiva de crédito).
-  // AFECTADO: procedimientos ADJUDICADOS (la afectación se confirma con la adjudicación).
   const comprometido = data.filter(r => ESTADOS_COMPROMETIDOS.includes(r.estado)).reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
   const afectado = data.filter(r => r.estado === "ADJUDICADO").reduce((s,r) => s + (Number(r.importe_apg)||0), 0)
   const montoAsignado = Number(presupuesto?.monto_asignado) || 0
@@ -383,16 +362,13 @@ function Dashboard({ session, perfil }) {
   const pctAfectado = montoAsignado ? Math.min(100, (afectado/montoAsignado)*100) : 0
   const pctComprometido = montoAsignado ? Math.min(100, 100 - pctAfectado, (comprometido/montoAsignado)*100) : 0
 
-  // ── PROYECCIÓN AÑOS FUTUROS: suma, por año posterior a ANIO_PRESUPUESTO, el monto en $
-  // que ya quedó calculado en cada APG cargada (cantidad × precio × IVA × cotización × variación).
-  // Solo entran procedimientos en estados "vivos" (mismo criterio que Comprometido/Afectado).
   const procedimientosProyectablesIds = useMemo(
     () => new Set(data.filter(r => ESTADOS_PROYECTABLES.includes(r.estado)).map(r => r.id)),
     [data]
   )
 
   const proyeccionFutura = useMemo(() => {
-    const porAnio = {} // { anio: { monto, procedimientos: Set<id> } }
+    const porAnio = {}
     apgTramitesFull.forEach(t => {
       if (!procedimientosProyectablesIds.has(t.procedimiento_id)) return
       const items = (t.apg_items || []).map(it => {
@@ -460,7 +436,6 @@ function Dashboard({ session, perfil }) {
 
   const handleLogout = async () => { await supabase.auth.signOut() }
 
-  // ── Editar presupuesto asignado (solo admin) ─────────────────────────
   const openEditPresupuesto = () => {
     setPresupuestoForm(presupuesto?.monto_asignado != null ? String(presupuesto.monto_asignado) : "")
     setErrMsg("")
@@ -622,7 +597,7 @@ function Dashboard({ session, perfil }) {
 
         {!loading && view === "resumen" && (
           <div>
-            {/* ── PANEL PRESUPUESTO 2026 (Asignado → Comprometido → Afectado, TOCAF) ── */}
+            {/* ── PANEL PRESUPUESTO 2026 ── */}
             <div style={{background:"linear-gradient(135deg,#0d3b24,#117a65)",borderRadius:14,padding:"20px 24px",marginBottom:24,boxShadow:"0 4px 16px rgba(17,122,101,.25)",color:"white"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10,marginBottom:16}}>
                 <div>
@@ -665,26 +640,24 @@ function Dashboard({ session, perfil }) {
                 {!loadingPresupuesto && !montoAsignado && <span style={{opacity:.8}}>⚠️ Todavía no se definió el presupuesto asignado {ANIO_PRESUPUESTO}{isAdmin ? " — hacé clic en \"Editar asignación\"" : ""}</span>}
               </div>
 
-              {/* ── Previsiones presupuestales (años posteriores, según APGs ya cargadas) ── */}
+              {/* ── PREVISIONES PRESUPUESTALES (años futuros) ── */}
               <div style={{marginTop:18,paddingTop:14,borderTop:"1px solid rgba(255,255,255,.18)"}}>
-                <div style={{fontSize:11,fontWeight:700,letterSpacing:.5,opacity:.85,marginBottom:10}}>📅 Previsiones presupuestales</div>
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:700,letterSpacing:.5,opacity:.85}}>📅 Previsiones presupuestales</div>
+                  <div style={{fontSize:10,opacity:.6,marginTop:3}}>Impacto estimado en presupuestos futuros según APGs vigentes</div>
+                </div>
                 {loadingProyeccion ? (
                   <div style={{fontSize:12,opacity:.7}}>Cargando...</div>
                 ) : aniosFuturos.length === 0 ? (
                   <div style={{fontSize:12,opacity:.7}}>Todavía no hay APG cargadas con monto previsto para años posteriores a {ANIO_PRESUPUESTO}.</div>
                 ) : (
-                  <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",gap:40,flexWrap:"wrap"}}>
                     {aniosFuturos.map(anio => (
-                      <div key={anio} style={{background:"rgba(255,255,255,.12)",borderRadius:8,padding:"10px 16px",minWidth:130}}>
-                        <div style={{fontSize:10,opacity:.75,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>Año {anio}</div>
-                        <div style={{fontSize:17,fontWeight:700,color:"#ffd966"}}>{fmt(proyeccionFutura[anio].monto)}</div>
+                      <div key={anio}>
+                        <div style={{fontSize:10,opacity:.75,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Año {anio}</div>
+                        <div style={{fontSize:20,fontWeight:700,color:"#ffd966"}}>{fmt(proyeccionFutura[anio].monto)}</div>
                       </div>
                     ))}
-                  </div>
-                )}
-                {!loadingProyeccion && (
-                  <div style={{fontSize:10,opacity:.6,marginTop:8}}>
-                    Según {procedimientosConApgPlurianual} de {total} procedimientos con distribución por año cargada · no incluye el PAC
                   </div>
                 )}
               </div>
@@ -709,7 +682,7 @@ function Dashboard({ session, perfil }) {
               ))}
             </div>
 
-            {/* ── MONTOS GLOBALES (demanda total, no confundir con ejecución presupuestal de arriba) ── */}
+            {/* ── MONTOS GLOBALES ── */}
             <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:10}}>💰 Montos</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:16,marginBottom:20}}>
               {[
@@ -725,7 +698,6 @@ function Dashboard({ session, perfil }) {
 
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:16}}>
               <div style={{background:"white",borderRadius:12,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-
                 <div style={{fontWeight:700,marginBottom:12,color:"#1a3a5c",fontSize:14}}>📊 Por estado</div>
                 {ESTADOS.filter(e=>porEstado[e]>0).map(e => {
                   const c = estadoColor(e)
