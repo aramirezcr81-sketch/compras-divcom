@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { generarAnexoCompraDirecta, generarNotaJefe, generarDistribucionAnios } from './docGenerators'
+import { generarAnexoCompraDirecta, generarNotaJefe, generarDistribucionAnios, generarFormularioA, generarFormularioB } from './docGenerators'
 import { itemTotalUR, itemCantidadTotal, itemTotalURTotal, grandTotalUR, grandTotalPesos, basePesosSinVariacion, fmtUR, fmtPesos } from './apgCalc'
 
 const MESES = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
@@ -10,6 +10,10 @@ const TIPO_SOLICITUD_MAP = {
   CDNC: "Compra Directa Convenio Marco", CPA: "Convenio de Participación Ampliado",
   LA: "Licitación Abreviada", LAA: "Licitación Abreviada Ampliada", LP: "Licitación Pública", OTRO: "",
 }
+
+// Formulario A: Compras Directas y Licitaciones (manual 3.1). Formulario B: excepción — exclusividad,
+// importaciones, contratación entre organismos del Estado (manual 3.2). Editable por si el caso concreto no encaja.
+const FORMULARIO_TIPO_DEFAULT = { CD:"A", CDA:"A", LA:"A", LAA:"A", LP:"A", CDE:"B", CDNC:"B", CPA:"B", OTRO:"A" }
 
 const MONEDA_OPCIONES = [
   { value: "UR", label: "UR — Unidad Reajustable" },
@@ -50,6 +54,27 @@ const emptyTramite = (procedimiento) => ({
   mes_cotizacion: `${MESES[new Date().getMonth()]} ${new Date().getFullYear()}`,
   pct_variacion_cambio: 10,
   condiciones_particulares: "",
+  // Formulario A / B ────────────────────────────────────────────────
+  formulario_tipo: FORMULARIO_TIPO_DEFAULT[procedimiento.tipo] || "A",
+  fecha_solicitud: new Date().toISOString().slice(0, 10),
+  incluye_especificaciones: true,
+  incluye_requerimientos_adm: true,
+  incluye_ponderaciones: true,
+  especificaciones_tecnicas: true,
+  recepcion_lugar: "",
+  recepcion_dias: "",
+  recepcion_horario: "",
+  recepcion_telefono: "",
+  recepcion_fecha_limite: "",
+  proveedores_convocar: [],
+  motivo_menor_proveedores: "",
+  proveedor_excepcion_nombre: "",
+  proveedor_excepcion_telefono: "",
+  proveedor_excepcion_correo: "",
+  fundamentacion_excepcion: "",
+  documentacion_proveedor: "",
+  jefe_divcom_nombre: "Cnel. José E. Perera",
+  jefe_divcom_cargo: "Jefe de la División Comercial",
 })
 
 const emptyItem = () => ({
@@ -62,6 +87,8 @@ const emptyItem = () => ({
   observaciones: "",
   precio_unitario_ur: "",
   iva_pct: 10,
+  convenio_marco: "NO",
+  requiere_muestra: false,
   anios: {},
 })
 
@@ -126,7 +153,8 @@ export default function ApgModal({ procedimiento, session, onClose }) {
             ;(it.apg_items_anios || []).forEach(ay => { aniosMap[ay.anio] = ay.cantidad; yearSet.add(ay.anio) })
             return { _key: crypto.randomUUID(), id: it.id, codigo_arce: it.codigo_arce, descripcion_arce: it.descripcion_arce,
               detalle_variante: it.detalle_variante, unidad_arce: it.unidad_arce, observaciones: it.observaciones,
-              precio_unitario_ur: it.precio_unitario_ur, iva_pct: it.iva_pct, anios: aniosMap }
+              precio_unitario_ur: it.precio_unitario_ur, iva_pct: it.iva_pct,
+              convenio_marco: it.convenio_marco ?? "NO", requiere_muestra: it.requiere_muestra ?? false, anios: aniosMap }
           })
           setItems(loadedItems)
           setAnios(yearSet.size ? [...yearSet].sort() : [new Date().getFullYear()])
@@ -174,6 +202,27 @@ export default function ApgModal({ procedimiento, session, onClose }) {
       mes_cotizacion: tramite.mes_cotizacion,
       pct_variacion_cambio: Number(tramite.pct_variacion_cambio) || 0,
       condiciones_particulares: tramite.condiciones_particulares,
+      // Formulario A / B ────────────────────────────────────────────
+      formulario_tipo: tramite.formulario_tipo,
+      fecha_solicitud: tramite.fecha_solicitud || null,
+      incluye_especificaciones: !!tramite.incluye_especificaciones,
+      incluye_requerimientos_adm: !!tramite.incluye_requerimientos_adm,
+      incluye_ponderaciones: !!tramite.incluye_ponderaciones,
+      especificaciones_tecnicas: !!tramite.especificaciones_tecnicas,
+      recepcion_lugar: tramite.recepcion_lugar,
+      recepcion_dias: tramite.recepcion_dias,
+      recepcion_horario: tramite.recepcion_horario,
+      recepcion_telefono: tramite.recepcion_telefono,
+      recepcion_fecha_limite: tramite.recepcion_fecha_limite || null,
+      proveedores_convocar: tramite.proveedores_convocar || [],
+      motivo_menor_proveedores: tramite.motivo_menor_proveedores,
+      proveedor_excepcion_nombre: tramite.proveedor_excepcion_nombre,
+      proveedor_excepcion_telefono: tramite.proveedor_excepcion_telefono,
+      proveedor_excepcion_correo: tramite.proveedor_excepcion_correo,
+      fundamentacion_excepcion: tramite.fundamentacion_excepcion,
+      documentacion_proveedor: tramite.documentacion_proveedor,
+      jefe_divcom_nombre: tramite.jefe_divcom_nombre,
+      jefe_divcom_cargo: tramite.jefe_divcom_cargo,
       updated_by: session.user.id,
     }
 
@@ -202,6 +251,7 @@ export default function ApgModal({ procedimiento, session, onClose }) {
         tramite_id: tramiteId, codigo_arce: it.codigo_arce, descripcion_arce: it.descripcion_arce,
         detalle_variante: it.detalle_variante, unidad_arce: it.unidad_arce, observaciones: it.observaciones,
         precio_unitario_ur: Number(it.precio_unitario_ur) || 0, iva_pct: Number(it.iva_pct) || 0,
+        convenio_marco: it.convenio_marco || "NO", requiere_muestra: !!it.requiere_muestra,
       }]).select().single()
       if (itErr) { setErrMsg(itErr.message); setSaving(false); return }
 
@@ -246,6 +296,8 @@ export default function ApgModal({ procedimiento, session, onClose }) {
       if (tipo === "anexo") await generarAnexoCompraDirecta(t, itemsCalc, anios)
       if (tipo === "nota") await generarNotaJefe(t, itemsCalc, anios)
       if (tipo === "distribucion") await generarDistribucionAnios(t, itemsCalc, anios)
+      if (tipo === "formularioA") await generarFormularioA(t, itemsCalc, anios)
+      if (tipo === "formularioB") await generarFormularioB(t, itemsCalc, anios)
     } catch (e) {
       setErrMsg("Error al generar el documento: " + e.message)
     }
@@ -338,6 +390,17 @@ export default function ApgModal({ procedimiento, session, onClose }) {
 
             {/* ── DATOS DEL TRÁMITE ── */}
             <div style={{fontWeight:700,color:"#1a3a5c",fontSize:13,marginBottom:10}}>📋 Datos del trámite</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14}}>
+              <div>
+                <label style={labelStyle}>Formulario de inicio (manual 3.1 / 3.2)</label>
+                <select value={tramite.formulario_tipo} onChange={e=>updateTramite("formulario_tipo", e.target.value)} style={{...inputStyle, cursor:"pointer"}}>
+                  <option value="A">Formulario A — Compras Directas y Licitaciones</option>
+                  <option value="B">Formulario B — Excepción (exclusividad / organismos del Estado)</option>
+                </select>
+              </div>
+              <Field label="Fecha de solicitud" type="date" value={tramite.fecha_solicitud} onChange={v=>updateTramite("fecha_solicitud",v)} />
+              <Field label="Jefe de División Comercial (firma)" value={tramite.jefe_divcom_nombre} onChange={v=>updateTramite("jefe_divcom_nombre",v)} />
+            </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:20}}>
               <Field label="Servicio solicitante" value={tramite.servicio_solicitante} onChange={v=>updateTramite("servicio_solicitante",v)} />
               <Field label="Profesional solicitante" value={tramite.profesional_solicitante} onChange={v=>updateTramite("profesional_solicitante",v)} />
@@ -368,6 +431,71 @@ export default function ApgModal({ procedimiento, session, onClose }) {
               <Field label="Condiciones particulares (una por línea — viñetas en el Anexo)" type="textarea" value={tramite.condiciones_particulares} onChange={v=>updateTramite("condiciones_particulares",v)} full />
             </div>
 
+            {/* ── DOCUMENTACIÓN ADJUNTA (manual 3.4) ── */}
+            <div style={{background:"#fafbfc",border:"1px solid #eee",borderRadius:10,padding:14,marginBottom:20}}>
+              <div style={{fontWeight:700,color:"#1a3a5c",fontSize:12,marginBottom:8}}>📎 Documentación adjunta al inicio del expediente</div>
+              <div style={{display:"flex",gap:18,flexWrap:"wrap",fontSize:12,color:"#444"}}>
+                <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                  <input type="checkbox" checked={tramite.especificaciones_tecnicas !== false} onChange={e=>updateTramite("especificaciones_tecnicas", e.target.checked)} /> Especificaciones técnicas
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                  <input type="checkbox" checked={tramite.incluye_requerimientos_adm !== false} onChange={e=>updateTramite("incluye_requerimientos_adm", e.target.checked)} /> Anexo de Requerimientos ADM
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                  <input type="checkbox" checked={tramite.incluye_ponderaciones !== false} onChange={e=>updateTramite("incluye_ponderaciones", e.target.checked)} /> Ponderaciones
+                </label>
+              </div>
+            </div>
+
+            {/* ── FORMULARIO A: recepción de muestras y proveedores a convocar ── */}
+            {tramite.formulario_tipo === "A" && (
+              <div style={{background:"#f0f6ff",border:"1px solid #cfe2f7",borderRadius:10,padding:14,marginBottom:20}}>
+                <div style={{fontWeight:700,color:"#1a3a5c",fontSize:12,marginBottom:10}}>📦 Formulario A — Recepción de muestras (marcá "Requiere muestra" en el ítem correspondiente, abajo)</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:10,marginBottom:14}}>
+                  <Field label="Lugar" value={tramite.recepcion_lugar} onChange={v=>updateTramite("recepcion_lugar",v)} />
+                  <Field label="Días" value={tramite.recepcion_dias} onChange={v=>updateTramite("recepcion_dias",v)} />
+                  <Field label="Horario" value={tramite.recepcion_horario} onChange={v=>updateTramite("recepcion_horario",v)} />
+                  <Field label="Teléfono" value={tramite.recepcion_telefono} onChange={v=>updateTramite("recepcion_telefono",v)} />
+                  <Field label="Fecha límite" type="date" value={tramite.recepcion_fecha_limite} onChange={v=>updateTramite("recepcion_fecha_limite",v)} />
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <div style={{fontWeight:700,color:"#1a3a5c",fontSize:12}}>Proveedores a convocar (mín. 3 Compra Directa / 6 Licitación)</div>
+                  <button onClick={()=>updateTramite("proveedores_convocar",[...(tramite.proveedores_convocar||[]),{nombre:"",telefono:"",correo:""}])}
+                    style={{background:"#eef6ff",color:"#2e75b6",border:"1px solid #cfe2f7",borderRadius:8,padding:"4px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>＋ Proveedor</button>
+                </div>
+                {(tramite.proveedores_convocar||[]).map((p, i) => (
+                  <div key={i} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1.5fr auto",gap:8,marginBottom:6}}>
+                    <input placeholder="Nombre" value={p.nombre||""} onChange={e=>{
+                      const arr=[...tramite.proveedores_convocar]; arr[i]={...arr[i],nombre:e.target.value}; updateTramite("proveedores_convocar",arr)
+                    }} style={inputStyle} />
+                    <input placeholder="Teléfono" value={p.telefono||""} onChange={e=>{
+                      const arr=[...tramite.proveedores_convocar]; arr[i]={...arr[i],telefono:e.target.value}; updateTramite("proveedores_convocar",arr)
+                    }} style={inputStyle} />
+                    <input placeholder="Correo" value={p.correo||""} onChange={e=>{
+                      const arr=[...tramite.proveedores_convocar]; arr[i]={...arr[i],correo:e.target.value}; updateTramite("proveedores_convocar",arr)
+                    }} style={inputStyle} />
+                    <button onClick={()=>updateTramite("proveedores_convocar",tramite.proveedores_convocar.filter((_,x)=>x!==i))}
+                      style={{background:"#fde8e8",border:"none",borderRadius:6,padding:"4px 9px",cursor:"pointer"}}>🗑</button>
+                  </div>
+                ))}
+                <Field label="Motivo si se convoca a menos del mínimo (dejar vacío si se cumple el mínimo)" type="textarea" value={tramite.motivo_menor_proveedores} onChange={v=>updateTramite("motivo_menor_proveedores",v)} full />
+              </div>
+            )}
+
+            {/* ── FORMULARIO B: datos del proveedor y fundamentación de la excepción ── */}
+            {tramite.formulario_tipo === "B" && (
+              <div style={{background:"#fff8e1",border:"1px solid #f3e2b3",borderRadius:10,padding:14,marginBottom:20}}>
+                <div style={{fontWeight:700,color:"#1a3a5c",fontSize:12,marginBottom:10}}>⚖️ Formulario B — Excepción</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+                  <Field label="Proveedor — Nombre" value={tramite.proveedor_excepcion_nombre} onChange={v=>updateTramite("proveedor_excepcion_nombre",v)} />
+                  <Field label="Proveedor — Teléfono" value={tramite.proveedor_excepcion_telefono} onChange={v=>updateTramite("proveedor_excepcion_telefono",v)} />
+                  <Field label="Proveedor — Correo" value={tramite.proveedor_excepcion_correo} onChange={v=>updateTramite("proveedor_excepcion_correo",v)} />
+                </div>
+                <Field label="Fundamentación de la excepción (exclusividad, etc. — dejar vacío si es contratación entre organismos del Estado)" type="textarea" value={tramite.fundamentacion_excepcion} onChange={v=>updateTramite("fundamentacion_excepcion",v)} full />
+                <Field label="Documentación a presentar por el proveedor (certificados, formularios, habilitaciones)" type="textarea" value={tramite.documentacion_proveedor} onChange={v=>updateTramite("documentacion_proveedor",v)} full />
+              </div>
+            )}
+
             {/* ── ÍTEMS ARCE ── */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <div style={{fontWeight:700,color:"#1a3a5c",fontSize:13}}>🧾 Ítems ARCE</div>
@@ -382,7 +510,7 @@ export default function ApgModal({ procedimiento, session, onClose }) {
                 <thead>
                   <tr style={{background:"#1a3a5c"}}>
                     {["Código","Descripción","Detalle/variante","Unidad","Observaciones",`Precio Unit. ${MONEDA_CODIGO[tramite.moneda]}`,"% IVA",
-                      ...anios.map(a=>`Cant. ${a}`), `Total ${MONEDA_CODIGO[tramite.moneda]}`,""].map((h,i)=>(
+                      ...anios.map(a=>`Cant. ${a}`), `Total ${MONEDA_CODIGO[tramite.moneda]}`,"Convenio Marco","Muestra",""].map((h,i)=>(
                       <th key={i} style={{color:"white",padding:"8px 6px",textAlign:"left",fontWeight:600,whiteSpace:"nowrap"}}>
                         {h.startsWith("Cant.") ? <span>{h} <span onClick={()=>removeAnio(Number(h.split(" ")[1]))} style={{cursor:"pointer",opacity:.7}}>✕</span></span> : h}
                       </th>
@@ -403,6 +531,8 @@ export default function ApgModal({ procedimiento, session, onClose }) {
                         <td key={a} style={{padding:4}}><input type="number" value={it.anios[a] ?? ""} onChange={e=>updateItemAnio(it._key,a,e.target.value)} style={{...inputStyle,minWidth:65}} /></td>
                       ))}
                       <td style={{padding:"4px 8px",fontWeight:700,color:"#117a65",whiteSpace:"nowrap"}}>{fmtUR(itemTotalURTotal(it,anios))}</td>
+                      <td style={{padding:4}}><input placeholder="NO" value={it.convenio_marco ?? "NO"} onChange={e=>updateItem(it._key,"convenio_marco",e.target.value)} style={{...inputStyle,minWidth:90}} /></td>
+                      <td style={{padding:4,textAlign:"center"}}><input type="checkbox" checked={!!it.requiere_muestra} onChange={e=>updateItem(it._key,"requiere_muestra",e.target.checked)} /></td>
                       <td style={{padding:4}}><button onClick={()=>removeItem(it._key)} style={{background:"#fde8e8",border:"none",borderRadius:6,padding:"4px 7px",cursor:"pointer",fontSize:11}}>🗑</button></td>
                     </tr>
                   ))}
@@ -421,6 +551,15 @@ export default function ApgModal({ procedimiento, session, onClose }) {
             {/* ── GENERAR DOCUMENTOS ── */}
             <div style={{fontWeight:700,color:"#1a3a5c",fontSize:13,marginBottom:10}}>📄 Generar documentos (.docx)</div>
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              {tramite.formulario_tipo === "A" ? (
+                <button onClick={()=>handleGenerar("formularioA")} disabled={!!generando} style={{background:"#1a3a5c",color:"white",border:"none",borderRadius:8,padding:"10px 16px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+                  {generando==="formularioA" ? "Generando..." : "📄 Formulario A"}
+                </button>
+              ) : (
+                <button onClick={()=>handleGenerar("formularioB")} disabled={!!generando} style={{background:"#1a3a5c",color:"white",border:"none",borderRadius:8,padding:"10px 16px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+                  {generando==="formularioB" ? "Generando..." : "📄 Formulario B"}
+                </button>
+              )}
               <button onClick={()=>handleGenerar("anexo")} disabled={!!generando} style={{background:"#2e75b6",color:"white",border:"none",borderRadius:8,padding:"10px 16px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
                 {generando==="anexo" ? "Generando..." : "📄 Anexo Compra Directa"}
               </button>
