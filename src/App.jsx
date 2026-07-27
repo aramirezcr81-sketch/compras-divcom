@@ -5,6 +5,7 @@ import Login from './Login'
 import ApgModal from './ApgModal'
 import UsuariosPendientesModal from './UsuariosPendientesModal'
 import RubrosAdminModal from './RubrosAdminModal'
+import PrevisionesView from './PrevisionesView'
 import { yearTotalPesos } from './apgCalc'
 
 const ESTADOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN","ADJUDICADO","SIN EFECTO","PENDIENTE DE INICIAR","ARCHIVADO"]
@@ -491,6 +492,7 @@ function Dashboard({ session, perfil }) {
     {id:"activos",label:"🔄 Activos"},
     {id:"pendientes",label:"📌 Pendientes"},
     {id:"archivados",label:"⛔ Archivados"},
+    {id:"previsiones",label:"📅 Previsiones"},
   ]
 
   const tableData = view === "activos"
@@ -758,7 +760,11 @@ function Dashboard({ session, perfil }) {
           </div>
         )}
 
-        {!loading && view !== "resumen" && (
+        {!loading && view === "previsiones" && (
+          <PrevisionesView rubros={rubros} subRubros={subRubros} isAdmin={isAdmin} />
+        )}
+
+        {!loading && view !== "resumen" && view !== "previsiones" && (
           <div>
             <div style={{background:"white",borderRadius:12,padding:"14px 16px",marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
               <input value={search} onChange={e=>setSearch(e.target.value)}
