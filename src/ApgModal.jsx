@@ -120,6 +120,23 @@ export default function ApgModal({ procedimiento, session, onClose }) {
   const [cambiandoEstado, setCambiandoEstado] = useState(false)
   const [comentarioEstado, setComentarioEstado] = useState("")
   const [estadoSeleccionado, setEstadoSeleccionado] = useState("CONFECCION")
+  const [refOpen, setRefOpen] = useState(null) // _key del ítem con el popover de referencia abierto
+  const [refCache, setRefCache] = useState({}) // codigo_arce -> [{estudio, frecuencia}]
+  const [refLoading, setRefLoading] = useState(false)
+
+  const buscarReferenciaArce = async (it) => {
+    const codigo = Number(it.codigo_arce)
+    if (!codigo) return
+    if (refOpen === it._key) { setRefOpen(null); return }
+    setRefOpen(it._key)
+    if (refCache[codigo]) return
+    setRefLoading(true)
+    const { data } = await supabase.from('arce_estudios_referencia')
+      .select('estudio, frecuencia').eq('codigo_arce', codigo)
+      .order('frecuencia', { ascending: false }).limit(20)
+    setRefCache(p => ({ ...p, [codigo]: data || [] }))
+    setRefLoading(false)
+  }
 
   const cargarHistorial = async (tramiteId) => {
     const { data, error } = await supabase
@@ -519,8 +536,16 @@ export default function ApgModal({ procedimiento, session, onClose }) {
                 </thead>
                 <tbody>
                   {items.map(it => (
-                    <tr key={it._key} style={{borderBottom:"1px solid #f0f0f0"}}>
-                      <td style={{padding:4}}><input value={it.codigo_arce} onChange={e=>updateItem(it._key,"codigo_arce",e.target.value)} style={{...inputStyle,minWidth:70}} /></td>
+                    <>
+                    <tr key={it._key} style={{borderBottom: refOpen===it._key ? "none" : "1px solid #f0f0f0"}}>
+                      <td style={{padding:4}}>
+                        <div style={{display:"flex",gap:2,alignItems:"center"}}>
+                          <input value={it.codigo_arce} onChange={e=>updateItem(it._key,"codigo_arce",e.target.value)} style={{...inputStyle,minWidth:60}} />
+                          <button type="button" title="Ver estudios históricos con este código" onClick={()=>buscarReferenciaArce(it)}
+                            disabled={!it.codigo_arce}
+                            style={{border:"none",background: refOpen===it._key ? "#2e75b6" : "#eef2ff",color: refOpen===it._key ? "white" : "#2e75b6",borderRadius:5,padding:"5px 6px",cursor:it.codigo_arce?"pointer":"default",fontSize:11,opacity:it.codigo_arce?1:.4}}>🔍</button>
+                        </div>
+                      </td>
                       <td style={{padding:4}}><input value={it.descripcion_arce} onChange={e=>updateItem(it._key,"descripcion_arce",e.target.value)} style={{...inputStyle,minWidth:140}} /></td>
                       <td style={{padding:4}}><input value={it.detalle_variante} onChange={e=>updateItem(it._key,"detalle_variante",e.target.value)} style={{...inputStyle,minWidth:120}} /></td>
                       <td style={{padding:4}}><input value={it.unidad_arce} onChange={e=>updateItem(it._key,"unidad_arce",e.target.value)} style={{...inputStyle,minWidth:70}} /></td>
@@ -535,6 +560,32 @@ export default function ApgModal({ procedimiento, session, onClose }) {
                       <td style={{padding:4,textAlign:"center"}}><input type="checkbox" checked={!!it.requiere_muestra} onChange={e=>updateItem(it._key,"requiere_muestra",e.target.checked)} /></td>
                       <td style={{padding:4}}><button onClick={()=>removeItem(it._key)} style={{background:"#fde8e8",border:"none",borderRadius:6,padding:"4px 7px",cursor:"pointer",fontSize:11}}>🗑</button></td>
                     </tr>
+                    {refOpen === it._key && (
+                      <tr style={{borderBottom:"1px solid #f0f0f0"}}>
+                        <td colSpan={11 + anios.length} style={{padding:"6px 10px 10px 10px",background:"#f8f9fb"}}>
+                          <div style={{fontSize:10,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.4,marginBottom:5}}>
+                            Estudios históricamente facturados con el código {it.codigo_arce}
+                          </div>
+                          {refLoading ? <div style={{fontSize:12,color:"#888"}}>Buscando…</div> : (
+                            (refCache[Number(it.codigo_arce)] || []).length === 0 ? (
+                              <div style={{fontSize:12,color:"#888"}}>Sin referencias históricas para este código.</div>
+                            ) : (
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                                {refCache[Number(it.codigo_arce)].map((r,i) => (
+                                  <button key={i} type="button" onClick={()=>{updateItem(it._key,"descripcion_arce",r.estudio); setRefOpen(null)}}
+                                    title="Click para usar como descripción"
+                                    style={{border:"1px solid #e2e8f0",background:"white",borderRadius:6,padding:"4px 9px",fontSize:11,cursor:"pointer",display:"flex",gap:5,alignItems:"center"}}>
+                                    {r.estudio}
+                                    <span style={{background:"#eef2ff",color:"#2e75b6",borderRadius:10,padding:"1px 6px",fontWeight:700,fontSize:10}}>×{r.frecuencia}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </>
                   ))}
                 </tbody>
               </table>
