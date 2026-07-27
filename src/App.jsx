@@ -4,12 +4,14 @@ import { supabase } from './supabaseClient'
 import Login from './Login'
 import ApgModal from './ApgModal'
 import UsuariosPendientesModal from './UsuariosPendientesModal'
+import RubrosAdminModal from './RubrosAdminModal'
 import { yearTotalPesos } from './apgCalc'
 
 const ESTADOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN","ADJUDICADO","SIN EFECTO","PENDIENTE DE INICIAR","ARCHIVADO"]
 const TIPOS = ["CD","CDA","CDE","CDNC","CPA","LA","LAA","LP","OTRO"]
 const ORIGENES = ["ANTERIOR 2026","TRÁMITE 2026","NO PAC PLANIFICADO"]
-const RUBROS = ["","PREVISIÓN","IMPREVISTOS"]
+// RUBROS/SUB-RUBROS ahora se cargan dinámicamente desde las tablas
+// `rubros` y `sub_rubros` (ver RubrosAdminModal.jsx y migrations/04_rubros_subrubros.sql)
 const ESTADOS_COMPROMETIDOS = ["EN TRÁMITE","EN ADQ","EN DFC","EN MDN"]
 const ESTADOS_PROYECTABLES = [...ESTADOS_COMPROMETIDOS, "ADJUDICADO"]
 // Funciones para comparar estados con texto libre (el campo puede tener texto adicional)
@@ -30,7 +32,7 @@ const APG_ESTADO_BADGE = {
 const COLS_LABELS = {
   procedimiento:"N° PROCEDIMIENTO", tipo:"TIPO", concepto:"CONCEPTO", proveedor:"PROVEEDOR",
   importe:"IMPORTE TOTAL ($)", periodo:"PERÍODO COBERTURA", anios_apg:"AÑOS APG",
-  rubro_apg:"RUBRO APG", importe_apg:"IMPORTE APG ($)", estado:"ESTADO ACTUAL",
+  rubro:"RUBRO", sub_rubro:"SUB-RUBRO", importe_apg:"IMPORTE APG ($)", estado:"ESTADO ACTUAL",
   fecha_apertura:"FECHA APERTURA", ultimo_control:"ÚLTIMO CONTROL",
   mdn_tcr:"MDN/TCR", sin_efecto:"SIN EFECTO/DESIERTA", observacion:"OBSERVACIONES",
   origen:"ORIGEN", pac:"PAC/NO PAC"
@@ -48,13 +50,9 @@ const estadoColor = (e) => {
   if (v.includes("DIV COM")) return {bg:"#ede7f6",txt:"#4a235a",dot:"#8e44ad"}
   return {bg:"#f0f0f0",txt:"#555",dot:"#999"}
 }
-const rubroColor = (r) => {
-  if ((r||"").toUpperCase() === "PREVISIÓN") return "#e8f8f0"
-  if ((r||"").toUpperCase() === "IMPREVISTOS") return "#fff8e1"
-  return "#f5f5f5"
-}
+const rubroColor = () => "#e3f0fd"
 
-const EMPTY_FORM = {procedimiento:"",tipo:"CDA",concepto:"",proveedor:"",importe:"",periodo:"",anios_apg:"",rubro_apg:"",importe_apg:"",estado:"EN TRÁMITE",fecha_apertura:"",ultimo_control:"",mdn_tcr:"",sin_efecto:"",observacion:"",origen:"TRÁMITE 2026",pac:"NO PAC"}
+const EMPTY_FORM = {procedimiento:"",tipo:"CDA",concepto:"",proveedor:"",importe:"",periodo:"",anios_apg:"",rubro_id:"",sub_rubro_id:"",importe_apg:"",estado:"EN TRÁMITE",fecha_apertura:"",ultimo_control:"",mdn_tcr:"",sin_efecto:"",observacion:"",origen:"TRÁMITE 2026",pac:"NO PAC"}
 
 function exportToExcel(rows, filename) {
   const headers = Object.values(COLS_LABELS)
@@ -68,8 +66,8 @@ function exportToExcel(rows, filename) {
   ]
   const wb = XLSX.utils.book_new()
   const ws = XLSX.utils.aoa_to_sheet(wsData)
-  ws["!cols"] = [22,8,45,28,15,12,10,12,15,22,12,14,10,18,50,18,10].map(w=>({wch:w}))
-  ws["!merges"] = [{s:{r:0,c:0},e:{r:0,c:16}},{s:{r:1,c:0},e:{r:1,c:16}}]
+  ws["!cols"] = [22,8,45,28,15,12,10,20,20,15,22,12,14,10,18,50,18,10].map(w=>({wch:w}))
+  ws["!merges"] = [{s:{r:0,c:0},e:{r:0,c:17}},{s:{r:1,c:0},e:{r:1,c:17}}]
   XLSX.utils.book_append_sheet(wb, ws, "COMPRAS")
 
   const porEstado = {}, porTipo = {}
@@ -177,6 +175,9 @@ function Dashboard({ session, perfil }) {
   const [filterEstado, setFilterEstado] = useState("")
   const [filterOrigen, setFilterOrigen] = useState("")
   const [filterRubro, setFilterRubro] = useState("")
+  const [rubros, setRubros] = useState([])
+  const [subRubros, setSubRubros] = useState([])
+  const [showRubrosAdmin, setShowRubrosAdmin] = useState(false)
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [confirmDel, setConfirmDel] = useState(null)
@@ -203,6 +204,19 @@ function Dashboard({ session, perfil }) {
   }
 
   useEffect(() => { fetchData() }, [])
+
+  const fetchRubros = async () => {
+    const { data: rb } = await supabase.from('rubros').select('*').eq('activo', true).order('codigo')
+    const { data: sr } = await supabase.from('sub_rubros').select('*').eq('activo', true).order('codigo')
+    setRubros(rb || [])
+    setSubRubros(sr || [])
+  }
+  useEffect(() => { fetchRubros() }, [])
+
+  const rubroNombre = (id) => { const r = rubros.find(x => x.id === id); return r ? `${r.codigo} - ${r.nombre}` : "" }
+  const subRubroNombre = (id) => { const s = subRubros.find(x => x.id === id); return s ? `${s.codigo} - ${s.nombre}` : "" }
+  const subRubrosDe = (rubro_id) => subRubros.filter(s => s.rubro_id === Number(rubro_id))
+  const paraExportar = (rows) => rows.map(r => ({ ...r, rubro: rubroNombre(r.rubro_id), sub_rubro: subRubroNombre(r.sub_rubro_id) }))
 
   const fetchPresupuesto = async () => {
     setLoadingPresupuesto(true)
@@ -349,7 +363,7 @@ function Dashboard({ session, perfil }) {
       (!filterTipo || r.tipo === filterTipo) &&
       (!filterEstado || r.estado === filterEstado) &&
       (!filterOrigen || r.origen === filterOrigen) &&
-      (!filterRubro || r.rubro_apg === filterRubro)
+      (!filterRubro || String(r.rubro_id) === filterRubro)
     )
   }, [data, search, filterTipo, filterEstado, filterOrigen, filterRubro])
 
@@ -419,6 +433,8 @@ function Dashboard({ session, perfil }) {
       importe_apg: Number(form.importe_apg)||0,
       fecha_apertura: form.fecha_apertura || null,
       ultimo_control: form.ultimo_control || null,
+      rubro_id: form.rubro_id ? Number(form.rubro_id) : null,
+      sub_rubro_id: form.sub_rubro_id ? Number(form.sub_rubro_id) : null,
     }
     delete payload.id; delete payload.created_at; delete payload.updated_at; delete payload.created_by
 
@@ -507,18 +523,18 @@ function Dashboard({ session, perfil }) {
                 <div style={{padding:"10px 16px",fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.5,borderBottom:"1px solid #f0f0f0"}}>
                   Vista actual ({tableData.length} registros)
                 </div>
-                <div onClick={()=>{exportToExcel(tableData,`Compras_DivCom_${today}.xlsx`);setShowExport(false)}}
+                <div onClick={()=>{exportToExcel(paraExportar(tableData),`Compras_DivCom_${today}.xlsx`);setShowExport(false)}}
                   style={{padding:"12px 16px",cursor:"pointer",borderBottom:"1px solid #f8f8f8"}}
                   onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"} onMouseLeave={e=>e.currentTarget.style.background="white"}>
                   <div style={{fontWeight:600,fontSize:13,color:"#1a3a5c"}}>📊 Excel (.xlsx)</div>
                   <div style={{fontSize:11,color:"#999",marginTop:2}}>Con hoja de resumen</div>
                 </div>
-                <div onClick={()=>{exportToCSV(tableData,`Compras_DivCom_${today}.csv`);setShowExport(false)}}
+                <div onClick={()=>{exportToCSV(paraExportar(tableData),`Compras_DivCom_${today}.csv`);setShowExport(false)}}
                   style={{padding:"12px 16px",cursor:"pointer",borderBottom:"1px solid #f8f8f8"}}
                   onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"} onMouseLeave={e=>e.currentTarget.style.background="white"}>
                   <div style={{fontWeight:600,fontSize:13,color:"#1a3a5c"}}>📄 CSV</div>
                 </div>
-                <div onClick={()=>{exportToExcel(data,`Compras_DivCom_COMPLETO_${today}.xlsx`);setShowExport(false)}}
+                <div onClick={()=>{exportToExcel(paraExportar(data),`Compras_DivCom_COMPLETO_${today}.xlsx`);setShowExport(false)}}
                   style={{padding:"12px 16px",cursor:"pointer",borderTop:"1px solid #f0f0f0"}}
                   onMouseEnter={e=>e.currentTarget.style.background="#f0f6ff"} onMouseLeave={e=>e.currentTarget.style.background="white"}>
                   <div style={{fontWeight:600,fontSize:13,color:"#1a3a5c"}}>📊 Excel completo ({data.length})</div>
@@ -760,13 +776,18 @@ function Dashboard({ session, perfil }) {
                 {ORIGENES.map(o=><option key={o}>{o}</option>)}
               </select>
               <select value={filterRubro} onChange={e=>setFilterRubro(e.target.value)} style={{border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 10px",fontSize:13}}>
-                <option value="">Rubro APG</option>
-                {["PREVISIÓN","IMPREVISTOS"].map(r=><option key={r}>{r}</option>)}
+                <option value="">Rubro</option>
+                {rubros.map(r=><option key={r.id} value={r.id}>{r.codigo} - {r.nombre}</option>)}
               </select>
               {(search||filterTipo||filterEstado||filterOrigen||filterRubro) &&
                 <button onClick={()=>{setSearch("");setFilterTipo("");setFilterEstado("");setFilterOrigen("");setFilterRubro("")}}
                   style={{background:"#f8d7da",color:"#c0392b",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,cursor:"pointer",fontWeight:600}}>
                   ✕ Limpiar
+                </button>}
+              {isAdmin &&
+                <button onClick={()=>setShowRubrosAdmin(true)}
+                  style={{background:"#eef2ff",color:"#2e75b6",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,cursor:"pointer",fontWeight:600}}>
+                  ⚙️ Gestionar Rubros
                 </button>}
               <span style={{fontSize:12,color:"#888",marginLeft:"auto"}}>{tableData.length} registros</span>
             </div>
@@ -776,7 +797,7 @@ function Dashboard({ session, perfil }) {
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
                     <tr style={{background:"#1a3a5c"}}>
-                      {["N° PROC.","TIPO","CONCEPTO","PROVEEDOR","IMPORTE","RUBRO APG","ESTADO","F. APERTURA",""].map(h=>(
+                      {["N° PROC.","TIPO","CONCEPTO","PROVEEDOR","IMPORTE","RUBRO","ESTADO","F. APERTURA",""].map(h=>(
                         <th key={h} style={{color:"white",padding:"10px 12px",textAlign:"left",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>{h}</th>
                       ))}
                     </tr>
@@ -799,7 +820,7 @@ function Dashboard({ session, perfil }) {
                           <td style={{padding:"8px 12px",maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#555"}} title={r.proveedor}>{r.proveedor||"-"}</td>
                           <td style={{padding:"8px 12px",whiteSpace:"nowrap",color:"#1a3a5c",fontWeight:600}}>{fmt(r.importe)}</td>
                           <td style={{padding:"8px 12px"}}>
-                            {r.rubro_apg && <span style={{background:rubroColor(r.rubro_apg),borderRadius:4,padding:"2px 7px",fontSize:11,fontWeight:600}}>{r.rubro_apg}</span>}
+                            {r.rubro_id && <span title={subRubroNombre(r.sub_rubro_id)} style={{background:rubroColor(),borderRadius:4,padding:"2px 7px",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>{rubroNombre(r.rubro_id)}</span>}
                           </td>
                           <td style={{padding:"8px 12px"}}>
                             <span style={{background:c.bg,color:c.txt,borderRadius:6,padding:"3px 8px",fontSize:11,fontWeight:600,display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>
@@ -850,7 +871,6 @@ function Dashboard({ session, perfil }) {
                 {label:"Importe Total ($)",key:"importe",type:"number"},
                 {label:"Período cobertura",key:"periodo"},
                 {label:"Años APG",key:"anios_apg"},
-                {label:"Rubro APG",key:"rubro_apg",type:"select",opts:RUBROS},
                 {label:"Importe APG ($)",key:"importe_apg",type:"number"},
                 {label:"Estado actual",key:"estado",type:"select",opts:ESTADOS},
                 {label:"Fecha apertura",key:"fecha_apertura",type:"date"},
@@ -875,6 +895,20 @@ function Dashboard({ session, perfil }) {
                   )}
                 </div>
               ))}
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:"#555",textTransform:"uppercase",letterSpacing:.5,display:"block",marginBottom:4}}>Rubro</label>
+                <select value={form.rubro_id||""} onChange={e=>setForm(p=>({...p,rubro_id:e.target.value,sub_rubro_id:""}))} style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 10px",fontSize:13}}>
+                  <option value="">—</option>
+                  {rubros.map(r=><option key={r.id} value={r.id}>{r.codigo} - {r.nombre}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:"#555",textTransform:"uppercase",letterSpacing:.5,display:"block",marginBottom:4}}>Sub-Rubro</label>
+                <select value={form.sub_rubro_id||""} onChange={e=>setForm(p=>({...p,sub_rubro_id:e.target.value}))} disabled={!form.rubro_id} style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 10px",fontSize:13}}>
+                  <option value="">—</option>
+                  {subRubrosDe(form.rubro_id).map(s=><option key={s.id} value={s.id}>{s.codigo} - {s.nombre}</option>)}
+                </select>
+              </div>
             </div>
             {errMsg && <div style={{padding:"0 24px",color:"#c0392b",fontSize:12}}>⚠️ {errMsg}</div>}
             <div style={{padding:"16px 24px 24px",display:"flex",gap:10,justifyContent:"flex-end"}}>
@@ -905,7 +939,8 @@ function Dashboard({ session, perfil }) {
                     <span style={{width:7,height:7,borderRadius:"50%",background:c.dot,display:"inline-block"}}/>
                     {r.estado}
                   </span>
-                  {r.rubro_apg && <span style={{background:rubroColor(r.rubro_apg),borderRadius:6,padding:"4px 10px",fontWeight:600,fontSize:12}}>{r.rubro_apg}</span>}
+                  {r.rubro_id && <span style={{background:rubroColor(),borderRadius:6,padding:"4px 10px",fontWeight:600,fontSize:12}}>{rubroNombre(r.rubro_id)}</span>}
+                  {r.sub_rubro_id && <span style={{background:"#f5f5f5",borderRadius:6,padding:"4px 10px",fontWeight:600,fontSize:12}}>{subRubroNombre(r.sub_rubro_id)}</span>}
                   <span style={{background:"#f0f0f0",borderRadius:6,padding:"4px 10px",fontSize:12,color:"#666"}}>{r.origen}</span>
                 </div>
                 {[
@@ -968,6 +1003,11 @@ function Dashboard({ session, perfil }) {
       {/* MODAL USUARIOS PENDIENTES */}
       {showPendientes && (
         <UsuariosPendientesModal onClose={()=>setShowPendientes(false)} />
+      )}
+
+      {/* MODAL GESTIÓN DE RUBROS/SUB-RUBROS */}
+      {showRubrosAdmin && (
+        <RubrosAdminModal onClose={()=>{setShowRubrosAdmin(false); fetchRubros()}} />
       )}
 
       {/* CONFIRM DELETE */}
