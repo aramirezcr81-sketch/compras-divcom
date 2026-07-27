@@ -205,3 +205,131 @@ export async function generarDistribucionAnios(tramite, items, anios) {
 
   await descargar(doc, `Distribucion_APG_Anios_${(tramite.procedimiento || "doc").replace(/[^\w-]/g,"_")}.docx`)
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// 4) FORMULARIO A — Requerimientos Administrativos Compras Directas y
+//    Licitaciones (Anexo N°1 del Protocolo de Compras DNSFFAA, Res. 855/DNS/19)
+// ════════════════════════════════════════════════════════════════════════
+export async function generarFormularioA(tramite, items, anios) {
+  const fila2 = (label, value) => new TableRow({ children: [
+    new TableCell({ width: { size: 30, type: WidthType.PERCENTAGE }, borders: CELL_BORDERS, shading: { type: ShadingType.CLEAR, color: "auto", fill: "F0F0F0" }, children: [new Paragraph({ children: [new TextRun({ text: label, bold: true, size: 18 })] })] }),
+    td(value),
+  ]})
+
+  const tablaGeneral = new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+    fila2("Fecha", tramite.fecha_solicitud ? tramite.fecha_solicitud.split("-").reverse().join("/") : ""),
+    fila2("N° y Tipo de Procedimiento", `${tramite.procedimiento || ""} — ${tramite.tipo_solicitud || ""}`),
+    fila2("Descripción", tramite.concepto || ""),
+  ]})
+
+  const tablaConsultas = new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+    new TableRow({ children: [th("Persona Responsable"), th("Lugar"), th("Días"), th("Horario"), th("Teléfono y Correo Electrónico")] }),
+    new TableRow({ children: [
+      td(tramite.profesional_solicitante), td(tramite.servicio_solicitante), td(tramite.dias_horarios), td(tramite.dias_horarios),
+      td([tramite.contacto_celular, tramite.contacto_interno, tramite.contacto_correo].filter(Boolean).join(" / ")),
+    ]}),
+  ]})
+
+  const tablaMuestras = (tramite.recepcion_lugar || tramite.recepcion_fecha_limite) ? new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+    new TableRow({ children: [th("Lugar"), th("Días"), th("Horario"), th("Teléfono"), th("Fecha Límite de Recepción")] }),
+    new TableRow({ children: [
+      td(tramite.recepcion_lugar), td(tramite.recepcion_dias), td(tramite.recepcion_horario), td(tramite.recepcion_telefono),
+      td(tramite.recepcion_fecha_limite ? tramite.recepcion_fecha_limite.split("-").reverse().join("/") : ""),
+    ]}),
+  ]}) : null
+
+  const proveedores = tramite.proveedores_convocar || []
+  const tablaProveedores = new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+    new TableRow({ children: [th("Nombre del Proveedor"), th("Teléfono/Fax"), th("E-mail")] }),
+    ...(proveedores.length ? proveedores.map(p => new TableRow({ children: [td(p.nombre), td(p.telefono), td(p.correo)] }))
+      : [new TableRow({ children: [td(""), td(""), td("")] })]),
+  ]})
+
+  const doc = new Document({ sections: [{ children: [
+    ...headerInst(),
+    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 200 }, children: [new TextRun({ text: "FORMULARIO DE REQUERIMIENTOS ADMINISTRATIVOS — COMPRAS DIRECTAS Y LICITACIONES (FORMULARIO A)", bold: true, size: 22 })] }),
+    tablaGeneral,
+    new Paragraph({ text: "", spacing: { before: 200 } }),
+    new Paragraph({ children: [new TextRun({ text: "II. Consultas Técnicas", bold: true, size: 20 })], spacing: { after: 100 } }),
+    tablaConsultas,
+    new Paragraph({ text: "", spacing: { before: 200 } }),
+    new Paragraph({ children: [new TextRun({ text: "III. Especificaciones Técnicas", bold: true, size: 20 })], spacing: { after: 100 } }),
+    parrafo(tramite.especificaciones_tecnicas ? "SÍ — se adjuntan firmadas en hoja aparte." : "NO"),
+    ...(tramite.documentacion_proveedor ? [
+      new Paragraph({ children: [new TextRun({ text: "IV. Documentación a presentar por el proveedor", bold: true, size: 20 })], spacing: { after: 100 } }),
+      parrafo(tramite.documentacion_proveedor, { justify: true }),
+    ] : []),
+    ...(tablaMuestras ? [
+      new Paragraph({ children: [new TextRun({ text: "V. Presentación de Muestras y/o Catálogos", bold: true, size: 20 })], spacing: { before: 200, after: 100 } }),
+      tablaMuestras,
+    ] : []),
+    new Paragraph({ children: [new TextRun({ text: `VI. Lista de Posibles Proveedores (mínimo ${tramite.tipo_solicitud?.toLowerCase().includes("licitaci") ? "6 para Licitaciones" : "3 para Compra Directa"})`, bold: true, size: 20 })], spacing: { before: 200, after: 100 } }),
+    tablaProveedores,
+    ...(tramite.motivo_menor_proveedores ? [parrafo(`Motivo de convocatoria a menos del mínimo: ${tramite.motivo_menor_proveedores}`, { justify: true })] : []),
+    new Paragraph({ text: "", spacing: { before: 500 } }),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "_______________________", size: 20 })] }),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Firma — ${tramite.jefe_divcom_nombre || ""}`, size: 18 })] }),
+    new Paragraph({ text: "", spacing: { before: 400 } }),
+    expedienteFooter(tramite),
+  ]}]})
+
+  await descargar(doc, `Formulario_A_${(tramite.procedimiento || "doc").replace(/[^\w-]/g,"_")}.docx`)
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 5) FORMULARIO B — Requerimientos Técnicos y/o Administrativos para
+//    Procedimientos y/o Productos por Excepción (Anexo N°1 del Protocolo)
+// ════════════════════════════════════════════════════════════════════════
+export async function generarFormularioB(tramite, items, anios) {
+  const fila2 = (label, value) => new TableRow({ children: [
+    new TableCell({ width: { size: 30, type: WidthType.PERCENTAGE }, borders: CELL_BORDERS, shading: { type: ShadingType.CLEAR, color: "auto", fill: "F0F0F0" }, children: [new Paragraph({ children: [new TextRun({ text: label, bold: true, size: 18 })] })] }),
+    td(value),
+  ]})
+
+  const tablaGeneral = new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+    fila2("Fecha", tramite.fecha_solicitud ? tramite.fecha_solicitud.split("-").reverse().join("/") : ""),
+    fila2("N° de Procedimiento", tramite.procedimiento || ""),
+    fila2("Descripción", tramite.concepto || ""),
+  ]})
+
+  const tablaProveedor = new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+    new TableRow({ children: [th("Nombre del Proveedor"), th("Teléfono/Fax"), th("Correo Electrónico")] }),
+    new TableRow({ children: [td(tramite.proveedor_excepcion_nombre), td(tramite.proveedor_excepcion_telefono), td(tramite.proveedor_excepcion_correo)] }),
+  ]})
+
+  const tablaConsultas = new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+    new TableRow({ children: [th("Persona Responsable"), th("Lugar"), th("Días"), th("Horario"), th("Teléfono y Correo Electrónico")] }),
+    new TableRow({ children: [
+      td(tramite.profesional_solicitante), td(tramite.servicio_solicitante), td(tramite.dias_horarios), td(tramite.dias_horarios),
+      td([tramite.contacto_celular, tramite.contacto_interno, tramite.contacto_correo].filter(Boolean).join(" / ")),
+    ]}),
+  ]})
+
+  const doc = new Document({ sections: [{ children: [
+    ...headerInst(),
+    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 200 }, children: [new TextRun({ text: "FORMULARIO DE REQUERIMIENTOS TÉCNICOS Y/O ADMINISTRATIVOS — PROCEDIMIENTOS POR EXCEPCIÓN (FORMULARIO B)", bold: true, size: 22 })] }),
+    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 200 }, children: [new TextRun({ text: "(Exclusivos, Importaciones, Urgencia, etc.)", italics: true, size: 18 })] }),
+    tablaGeneral,
+    new Paragraph({ text: "", spacing: { before: 200 } }),
+    new Paragraph({ children: [new TextRun({ text: "II. Datos del Proveedor", bold: true, size: 20 })], spacing: { after: 100 } }),
+    tablaProveedor,
+    new Paragraph({ text: "", spacing: { before: 200 } }),
+    new Paragraph({ children: [new TextRun({ text: "III. Fundamentos de la Excepción", bold: true, size: 20 })], spacing: { after: 100 } }),
+    parrafo(tramite.fundamentacion_excepcion || "(Contratación entre organismos del Estado — no requiere fundamentación de excepción)", { justify: true }),
+    new Paragraph({ children: [new TextRun({ text: "IV. Consultas Técnicas", bold: true, size: 20 })], spacing: { before: 200, after: 100 } }),
+    tablaConsultas,
+    new Paragraph({ children: [new TextRun({ text: "V. Especificaciones Técnicas", bold: true, size: 20 })], spacing: { before: 200, after: 100 } }),
+    parrafo(tramite.especificaciones_tecnicas ? "SÍ — se adjuntan firmadas en hoja aparte." : "NO"),
+    ...(tramite.documentacion_proveedor ? [
+      new Paragraph({ children: [new TextRun({ text: "VI. Documentación a presentar por el proveedor", bold: true, size: 20 })], spacing: { before: 200, after: 100 } }),
+      parrafo(tramite.documentacion_proveedor, { justify: true }),
+    ] : []),
+    new Paragraph({ text: "", spacing: { before: 500 } }),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "_______________________", size: 20 })] }),
+    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Firma — ${tramite.jefe_divcom_nombre || ""}`, size: 18 })] }),
+    new Paragraph({ text: "", spacing: { before: 400 } }),
+    expedienteFooter(tramite),
+  ]}]})
+
+  await descargar(doc, `Formulario_B_${(tramite.procedimiento || "doc").replace(/[^\w-]/g,"_")}.docx`)
+}
