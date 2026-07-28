@@ -53,7 +53,7 @@ const estadoColor = (e) => {
 }
 const rubroColor = () => "#e3f0fd"
 
-const EMPTY_FORM = {procedimiento:"",tipo:"CDA",concepto:"",proveedor:"",importe:"",periodo:"",anios_apg:"",rubro_id:"",sub_rubro_id:"",importe_apg:"",estado:"EN TRÁMITE",fecha_apertura:"",ultimo_control:"",mdn_tcr:"",sin_efecto:"",observacion:"",origen:"TRÁMITE 2026",pac:"NO PAC"}
+const EMPTY_FORM = {procedimiento:"",tipo:"CDA",concepto:"",proveedor:"",importe:"",periodo:"",anios_apg:"",rubro_id:"",sub_rubro_id:"",importe_apg:"",estado:"EN TRÁMITE",fecha_apertura:"",ultimo_control:"",mdn_tcr:"",sin_efecto:"",observacion:"",origen:"TRÁMITE 2026",pac:"NO PAC",caracter_compra:"PREVISTA",justificacion_imprevisto:""}
 
 function exportToExcel(rows, filename) {
   const headers = Object.values(COLS_LABELS)
@@ -360,7 +360,7 @@ function Dashboard({ session, perfil }) {
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     return data.filter(r =>
-      (!q || [r.procedimiento,r.concepto,r.proveedor,r.estado,r.observacion].some(f => (f||"").toLowerCase().includes(q))) &&
+      (!q || [r.procedimiento,r.concepto,r.proveedor,r.estado,r.observacion,r.numero_apg].some(f => (f||"").toLowerCase().includes(q))) &&
       (!filterTipo || r.tipo === filterTipo) &&
       (!filterEstado || r.estado === filterEstado) &&
       (!filterOrigen || r.origen === filterOrigen) &&
@@ -423,10 +423,14 @@ function Dashboard({ session, perfil }) {
   )
 
   const openAdd = () => { setForm(EMPTY_FORM); setErrMsg(""); setModal({mode:"add"}) }
-  const openEdit = (r) => { setForm({...r}); setErrMsg(""); setModal({mode:"edit",record:r}) }
+  const openEdit = (r) => { setForm({...EMPTY_FORM, ...r, caracter_compra: r.caracter_compra || "PREVISTA", justificacion_imprevisto: r.justificacion_imprevisto || ""}); setErrMsg(""); setModal({mode:"edit",record:r}) }
   const openView = (r) => setModal({mode:"view",record:r})
 
   const saveForm = async () => {
+    if (form.caracter_compra === "IMPREVISTA" && !String(form.justificacion_imprevisto||"").trim()) {
+      setErrMsg("Al marcar la compra como Imprevista, hay que explicar el motivo en \"Justificación del imprevisto\".")
+      return
+    }
     setSaving(true); setErrMsg("")
     const payload = {
       ...form,
@@ -436,6 +440,8 @@ function Dashboard({ session, perfil }) {
       ultimo_control: form.ultimo_control || null,
       rubro_id: form.rubro_id ? Number(form.rubro_id) : null,
       sub_rubro_id: form.sub_rubro_id ? Number(form.sub_rubro_id) : null,
+      caracter_compra: form.caracter_compra || "PREVISTA",
+      justificacion_imprevisto: form.caracter_compra === "IMPREVISTA" ? (form.justificacion_imprevisto||"") : null,
     }
     delete payload.id; delete payload.created_at; delete payload.updated_at; delete payload.created_by
 
@@ -456,6 +462,52 @@ function Dashboard({ session, perfil }) {
     if (error) { setErrMsg(error.message); return }
     setConfirmDel(null); setModal(null)
     fetchData()
+  }
+
+  // Genera un procedimiento en `compras` a partir de una Previsión Autorizada,
+  // lo vincula (previsiones.procedimiento_id) y abre directo el modal de APG.
+  const generarApgDesdePrevision = async (prevision) => {
+    const conceptoPartes = [prevision.descripcion_acce, prevision.descripcion_variante_acce].filter(Boolean)
+    const payload = {
+      procedimiento: "",
+      tipo: prevision.tipo_compra_estimado || "CDA",
+      concepto: conceptoPartes.join(" — "),
+      proveedor: "",
+      importe: 0,
+      periodo: String(prevision.anio_ejercicio || ""),
+      anios_apg: String(prevision.anio_ejercicio || ""),
+      rubro_id: prevision.rubro_id || null,
+      sub_rubro_id: prevision.sub_rubro_id || null,
+      importe_apg: Number(prevision.costo_total_servicio) || 0,
+      estado: "EN TRÁMITE",
+      fecha_apertura: null,
+      ultimo_control: null,
+      mdn_tcr: "",
+      sin_efecto: "",
+      observacion: `Generado desde Previsión ${prevision.anio_ejercicio} — ${prevision.servicio_solicitante}`,
+      origen: `PREVISIÓN ${prevision.anio_ejercicio}`,
+      pac: prevision.pac || "PAC",
+      caracter_compra: "PREVISTA",
+      justificacion_imprevisto: null,
+    }
+    const { data: inserted, error } = await supabase.from('compras')
+      .insert([{ ...payload, created_by: session.user.id }])
+      .select().single()
+    if (error) { setErrMsg(error.message); return null }
+
+    const { error: linkError } = await supabase.from('previsiones')
+      .update({ procedimiento_id: inserted.id }).eq('id', prevision.id)
+    if (linkError) { setErrMsg(linkError.message) }
+
+    await fetchData()
+    setApgModal(inserted)
+    return inserted
+  }
+
+  const verProcedimientoDePrevision = (procedimientoId) => {
+    const rec = data.find(r => r.id === procedimientoId)
+    if (rec) setApgModal(rec)
+    else setErrMsg("No se encontró el procedimiento vinculado (puede haber sido eliminado).")
   }
 
   const handleLogout = async () => { await supabase.auth.signOut() }
@@ -761,7 +813,8 @@ function Dashboard({ session, perfil }) {
         )}
 
         {!loading && view === "previsiones" && (
-          <PrevisionesView rubros={rubros} subRubros={subRubros} isAdmin={isAdmin} />
+          <PrevisionesView rubros={rubros} subRubros={subRubros} isAdmin={isAdmin}
+            onGenerarApg={generarApgDesdePrevision} onVerProcedimiento={verProcedimientoDePrevision} />
         )}
 
         {!loading && view !== "resumen" && view !== "previsiones" && (
@@ -885,6 +938,10 @@ function Dashboard({ session, perfil }) {
                 {label:"Sin efecto / Desierta",key:"sin_efecto"},
                 {label:"Origen",key:"origen",type:"select",opts:ORIGENES},
                 {label:"PAC / NO PAC",key:"pac",type:"select",opts:["PAC","NO PAC"]},
+                {label:"Carácter de la compra",key:"caracter_compra",type:"select",opts:["PREVISTA","IMPREVISTA"]},
+                ...(form.caracter_compra==="IMPREVISTA" ? [
+                  {label:"Justificación del imprevisto",key:"justificacion_imprevisto",full:true,type:"textarea"},
+                ] : []),
                 {label:"Observaciones",key:"observacion",full:true,type:"textarea"},
               ].map(f => (
                 <div key={f.key} style={{gridColumn:f.full?"1/-1":"auto"}}>
@@ -948,7 +1005,16 @@ function Dashboard({ session, perfil }) {
                   {r.rubro_id && <span style={{background:rubroColor(),borderRadius:6,padding:"4px 10px",fontWeight:600,fontSize:12}}>{rubroNombre(r.rubro_id)}</span>}
                   {r.sub_rubro_id && <span style={{background:"#f5f5f5",borderRadius:6,padding:"4px 10px",fontWeight:600,fontSize:12}}>{subRubroNombre(r.sub_rubro_id)}</span>}
                   <span style={{background:"#f0f0f0",borderRadius:6,padding:"4px 10px",fontSize:12,color:"#666"}}>{r.origen}</span>
+                  {r.numero_apg && <span style={{background:"#e3f0fd",color:"#2e75b6",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700}}>N° APG: {r.numero_apg}</span>}
+                  <span style={{background:r.caracter_compra==="IMPREVISTA"?"#fde8e8":"#e8f8f0",color:r.caracter_compra==="IMPREVISTA"?"#c0392b":"#27ae60",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700}}>
+                    {r.caracter_compra==="IMPREVISTA"?"⚠ IMPREVISTA":"✔ PREVISTA"}
+                  </span>
                 </div>
+                {r.caracter_compra==="IMPREVISTA" && r.justificacion_imprevisto && (
+                  <div style={{background:"#fff8f0",border:"1px solid #f5d9b8",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13}}>
+                    <b>Justificación del imprevisto:</b> {r.justificacion_imprevisto}
+                  </div>
+                )}
                 {[
                   ["Concepto",r.concepto],["Proveedor",r.proveedor||"-"],
                   ["Importe Total",fmt(r.importe)],["Período cobertura",r.periodo||"-"],
