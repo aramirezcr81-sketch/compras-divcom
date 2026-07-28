@@ -49,6 +49,7 @@ const emptyTramite = (procedimiento) => ({
   destinatario_nota: "JEFE DE LA DIVISIÓN COMERCIAL DE LA D.N.S.FF.AA.",
   articulo_ley: "artículo 27 de la Ley N° 20.446",
   expediente_numero: "",
+  numero_apg: "",
   iniciales_firma: "",
   cotizacion_ur: "",
   mes_cotizacion: `${MESES[new Date().getMonth()]} ${new Date().getFullYear()}`,
@@ -214,6 +215,7 @@ export default function ApgModal({ procedimiento, session, onClose }) {
       destinatario_nota: tramite.destinatario_nota,
       articulo_ley: tramite.articulo_ley,
       expediente_numero: tramite.expediente_numero,
+      numero_apg: tramite.numero_apg || null,
       iniciales_firma: tramite.iniciales_firma,
       cotizacion_ur: Number(tramite.cotizacion_ur) || null,
       mes_cotizacion: tramite.mes_cotizacion,
@@ -282,6 +284,12 @@ export default function ApgModal({ procedimiento, session, onClose }) {
     }
 
     setSaving(false)
+
+    // Espejar el N° de APG (y el expediente) en `compras` para poder verlos/buscarlos
+    // desde el listado principal sin abrir este modal.
+    await supabase.from('compras').update({
+      numero_apg: tramite.numero_apg || null,
+    }).eq('id', procedimiento.id)
   }
 
   const cambiarEstado = async () => {
@@ -334,6 +342,7 @@ export default function ApgModal({ procedimiento, session, onClose }) {
           <div>
             <div style={{color:"white",fontWeight:700,fontSize:16}}>📑 Documentación APG</div>
             <div style={{color:"#bcd4ec",fontSize:12,marginTop:2}}>{procedimiento.procedimiento} — {procedimiento.concepto}</div>
+            {tramite.numero_apg && <div style={{color:"white",fontSize:12,marginTop:4,fontWeight:700}}>N° de APG: {tramite.numero_apg}</div>}
           </div>
           <button onClick={onClose} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:16}}>✕</button>
         </div>
@@ -428,6 +437,7 @@ export default function ApgModal({ procedimiento, session, onClose }) {
               <Field label="Plazo de ejecución (meses)" type="number" value={tramite.plazo_ejecucion_meses} onChange={v=>updateTramite("plazo_ejecucion_meses",v)} />
               <Field label="Tipo de solicitud" value={tramite.tipo_solicitud} onChange={v=>updateTramite("tipo_solicitud",v)} />
               <Field label="Expediente N°" value={tramite.expediente_numero} onChange={v=>updateTramite("expediente_numero",v)} />
+              <Field label="N° de APG (asignado por Financiero Contable)" value={tramite.numero_apg} onChange={v=>updateTramite("numero_apg",v)} />
               <Field label="Destinatario — Anexo (Adquisiciones)" value={tramite.destinatario_anexo} onChange={v=>updateTramite("destinatario_anexo",v)} full />
               <Field label="Destinatario — Nota (Jefe Comercial)" value={tramite.destinatario_nota} onChange={v=>updateTramite("destinatario_nota",v)} full />
               <Field label="Artículo de ley a citar (dejar vacío si no aplica)" value={tramite.articulo_ley} onChange={v=>updateTramite("articulo_ley",v)} full />
