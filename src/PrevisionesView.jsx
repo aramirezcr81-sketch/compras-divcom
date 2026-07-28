@@ -19,8 +19,8 @@ const PRIORIDAD_INFO = {
 }
 
 // ── Columnas EXACTAS del export real del Sistema de Previsiones (Sanidad Militar) ──
-// SERVICIO SOLICITANTE | CÓD ACCE | DESCRIPCIÓN ACCE | CÓDIGO VARIANTE ACCE | DESCRIPCIÓN VARIANTE ACCE |
-// UNIDAD DE ENTREGA ACCE | CANTIDAD 2023 | CANTIDAD 2024 | CANTIDAD 2025 | IMPUESTOS | PROMEDIO SISTEMA |
+// SERVICIO SOLICITANTE | CÓD ARCE | DESCRIPCIÓN ARCE | CÓDIGO VARIANTE ARCE | DESCRIPCIÓN VARIANTE ARCE |
+// UNIDAD DE ENTREGA ARCE | CANTIDAD 2023 | CANTIDAD 2024 | CANTIDAD 2025 | IMPUESTOS | PROMEDIO SISTEMA |
 // COSTO UNITARIO SIN IMPUESTOS SISTEMA | IMPUESTOS SISTEMA | COSTO TOTAL IMPUESTOS INCLUIDOS SISTEMA |
 // CANTIDAD SOLICITADA SERVICIO | COSTO UNITARIO SIN IMPUESTOS SERVICIO | IMPUESTOS SERVICIO |
 // COSTO TOTAL IMPUESTOS INCLUIDOS SERVICIO | PRIORIDAD SERVICIO | OBSERVACIONES DEL SERVICIO
@@ -47,9 +47,10 @@ const emptyForm = (anioDefault) => ({
   prioridad_servicio: "", observaciones_servicio: "",
   rubro_id: "", sub_rubro_id: "", tipo_compra_estimado: "CD", trimestre_estimado: "",
   pac: "PAC", estado: "BORRADOR", observaciones: "",
+  nombre_compra: "", importe_apg_2027: "", importe_apg_2028: "", estado_procedimiento_anterior: "",
 })
 
-export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
+export default function PrevisionesView({ rubros, subRubros, isAdmin, onGenerarApg, onVerProcedimiento }) {
   const anioActual = new Date().getFullYear()
   const [previsiones, setPrevisiones] = useState([])
   const [loading, setLoading] = useState(true)
@@ -62,6 +63,69 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
   const [form, setForm] = useState(emptyForm(anioActual + 1))
   const [saving, setSaving] = useState(false)
   const [confirmDel, setConfirmDel] = useState(null)
+  const [generandoId, setGenerandoId] = useState(null)
+
+  // ── Adjuntos (documentos sueltos recibidos por correo, ej. anexos de imprevistos) ──
+  const BUCKET_ADJUNTOS = "apg-adjuntos"
+  const [adjuntosModal, setAdjuntosModal] = useState(null)
+  const [adjuntos, setAdjuntos] = useState([])
+  const [loadingAdjuntos, setLoadingAdjuntos] = useState(false)
+  const [uploadingAdjunto, setUploadingAdjunto] = useState(false)
+  const [adjuntoErr, setAdjuntoErr] = useState("")
+
+  const folderDe = (id) => `previsiones/${id}`
+
+  const fetchAdjuntos = async (id) => {
+    setLoadingAdjuntos(true); setAdjuntoErr("")
+    const { data, error } = await supabase.storage.from(BUCKET_ADJUNTOS)
+      .list(folderDe(id), { sortBy: { column: "created_at", order: "desc" } })
+    if (error) setAdjuntoErr(error.message)
+    else setAdjuntos((data || []).filter(f => f.name && f.name !== ".emptyFolderPlaceholder"))
+    setLoadingAdjuntos(false)
+  }
+
+  const openAdjuntos = (p) => { setAdjuntosModal(p); fetchAdjuntos(p.id) }
+
+  const subirAdjuntos = async (fileList) => {
+    if (!adjuntosModal) return
+    setUploadingAdjunto(true); setAdjuntoErr("")
+    for (const file of Array.from(fileList)) {
+      const nombreLimpio = file.name.replace(/[^\w.\-]/g, "_")
+      const path = `${folderDe(adjuntosModal.id)}/${Date.now()}_${nombreLimpio}`
+      const { error } = await supabase.storage.from(BUCKET_ADJUNTOS).upload(path, file)
+      if (error) { setAdjuntoErr(error.message); break }
+    }
+    await fetchAdjuntos(adjuntosModal.id)
+    setUploadingAdjunto(false)
+  }
+
+  const descargarAdjunto = async (f) => {
+    const path = `${folderDe(adjuntosModal.id)}/${f.name}`
+    const { data, error } = await supabase.storage.from(BUCKET_ADJUNTOS).createSignedUrl(path, 60)
+    if (error) { setAdjuntoErr(error.message); return }
+    window.open(data.signedUrl, "_blank")
+  }
+
+  const eliminarAdjunto = async (f) => {
+    const path = `${folderDe(adjuntosModal.id)}/${f.name}`
+    const { error } = await supabase.storage.from(BUCKET_ADJUNTOS).remove([path])
+    if (error) { setAdjuntoErr(error.message); return }
+    fetchAdjuntos(adjuntosModal.id)
+  }
+
+  const fmtBytes = (n) => {
+    if (!n && n !== 0) return ""
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  const handleGenerarApg = async (p) => {
+    if (!onGenerarApg || generandoId) return
+    setGenerandoId(p.id)
+    await onGenerarApg(p)
+    setGenerandoId(null)
+  }
 
   const fetchPrevisiones = async () => {
     setLoading(true)
@@ -104,7 +168,17 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
   filtradas.forEach(p => { if (totalesPrioridad[p.prioridad_servicio] !== undefined) totalesPrioridad[p.prioridad_servicio] += Number(p.costo_total_servicio) || 0 })
 
   const openAdd = () => { setForm(emptyForm(filterAnio || anioActual + 1)); setErrMsg(""); setModal({ mode: "add" }) }
-  const openEdit = (p) => { setForm({ ...p }); setErrMsg(""); setModal({ mode: "edit", record: p }) }
+  const openEdit = (p) => {
+    setForm({
+      ...emptyForm(p.anio_ejercicio || anioActual + 1),
+      ...p,
+      nombre_compra: p.nombre_compra ?? "",
+      importe_apg_2027: p.importe_apg_2027 ?? "",
+      importe_apg_2028: p.importe_apg_2028 ?? "",
+      estado_procedimiento_anterior: p.estado_procedimiento_anterior ?? "",
+    })
+    setErrMsg(""); setModal({ mode: "edit", record: p })
+  }
 
   const saveForm = async () => {
     setSaving(true); setErrMsg("")
@@ -121,6 +195,10 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
       costo_total_servicio: num(form.costo_total_servicio) || (num(form.cantidad_solicitada_servicio) * num(form.costo_unitario_servicio)),
       prioridad_servicio: form.prioridad_servicio ? Number(form.prioridad_servicio) : null,
       trimestre_estimado: form.trimestre_estimado ? Number(form.trimestre_estimado) : null,
+      nombre_compra: form.nombre_compra || null,
+      importe_apg_2027: num(form.importe_apg_2027),
+      importe_apg_2028: num(form.importe_apg_2028),
+      estado_procedimiento_anterior: form.estado_procedimiento_anterior || null,
     }
     delete payload.id; delete payload.created_at; delete payload.updated_at; delete payload.procedimiento_id
 
@@ -170,7 +248,7 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
     XLSX.utils.book_append_sheet(wb, ws, "PAC Agregado")
 
     const wsDetalle = XLSX.utils.aoa_to_sheet([
-      ["SERVICIO", "CÓD ACCE", "DESCRIPCIÓN ACCE", "VARIANTE", "RUBRO", "SUB-RUBRO", "CANT. 2023", "CANT. 2024", "CANT. 2025",
+      ["SERVICIO", "CÓD ARCE", "DESCRIPCIÓN ARCE", "VARIANTE", "RUBRO", "SUB-RUBRO", "CANT. 2023", "CANT. 2024", "CANT. 2025",
        "CANT. SOLICITADA", "COSTO UNIT. SERVICIO", "COSTO TOTAL SERVICIO", "PRIORIDAD", "TIPO", "TRIMESTRE", "ESTADO"],
       ...soloPAC.map(p => [
         p.servicio_solicitante, p.cod_acce, p.descripcion_acce, p.descripcion_variante_acce,
@@ -187,7 +265,52 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
     XLSX.writeFile(wb, `PAC_${filterAnio}_DivCom_${new Date().toISOString().slice(0, 10)}.xlsx`)
   }
 
-  // ── Importador: parsea el export REAL del Sistema de Previsiones ──
+  // ── Exportación en el formato exacto del Anexo N°2 (Directiva N°01/DPP/26) para enviar a DPP ──
+  const exportarAnexoDPP = () => {
+    const nombreDe = (p) => p.nombre_compra || [p.descripcion_acce, p.descripcion_variante_acce].filter(Boolean).join(" — ")
+    const filaDe = (p) => [
+      rubroNombre(p.rubro_id), subRubroNombre(p.sub_rubro_id), p.servicio_solicitante, nombreDe(p),
+      p.tipo_compra_estimado || "", Number(p.costo_total_servicio) || 0,
+      p.trimestre_estimado ? `T${p.trimestre_estimado}` : "",
+      Number(p.importe_apg_2027) || 0, Number(p.importe_apg_2028) || 0,
+      p.observaciones || "", p.estado_procedimiento_anterior || "",
+    ]
+    const soloPAC2 = filtradas.filter(p => (p.pac || "PAC") === "PAC")
+    const soloNoPAC2 = filtradas.filter(p => (p.pac || "PAC") === "NO PAC")
+    const headers = ["RUBRO", "SUB RUBRO", "SERVICIO", "NOMBRE DE LA COMPRA", "TIPO DE PROCEDIMIENTO",
+      "IMPORTE TOTAL", "PERÍODO DE CONVOCATORIA", "IMPORTE APG 2027", "IMPORTE APG 2028", "OBS",
+      "ESTADO DE SITUACIÓN DEL PROCEDIMIENTO ANTERIOR"]
+
+    const wsData = [
+      [`PLANIFICACIÓN ANUAL DE COMPRAS ${filterAnio} — ANEXO N°2 (Directiva N°01/DPP/26)`],
+      [`División Comercial — DNSFFAA — Exportado ${new Date().toLocaleDateString('es-UY')}`],
+      [],
+      ["PAC"],
+      headers,
+      ...soloPAC2.map(filaDe),
+      ["TOTAL PAC", "", "", "", "", soloPAC2.reduce((s, p) => s + (Number(p.costo_total_servicio) || 0), 0), "",
+        soloPAC2.reduce((s, p) => s + (Number(p.importe_apg_2027) || 0), 0),
+        soloPAC2.reduce((s, p) => s + (Number(p.importe_apg_2028) || 0), 0), "", ""],
+      [],
+      ["NO PAC"],
+      headers,
+      ...soloNoPAC2.map(filaDe),
+      ["TOTAL NO PAC", "", "", "", "", soloNoPAC2.reduce((s, p) => s + (Number(p.costo_total_servicio) || 0), 0), "",
+        soloNoPAC2.reduce((s, p) => s + (Number(p.importe_apg_2027) || 0), 0),
+        soloNoPAC2.reduce((s, p) => s + (Number(p.importe_apg_2028) || 0), 0), "", ""],
+    ]
+    const wb2 = XLSX.utils.book_new()
+    const ws2 = XLSX.utils.aoa_to_sheet(wsData)
+    ws2["!cols"] = [16, 18, 26, 34, 18, 14, 16, 14, 14, 22, 30].map(w => ({ wch: w }))
+    ws2["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 10 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 10 } },
+    ]
+    XLSX.utils.book_append_sheet(wb2, ws2, "Anexo N2")
+    XLSX.writeFile(wb2, `Anexo_N2_Previsiones_${filterAnio}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
+
   const [showImport, setShowImport] = useState(false)
   const [importStep, setImportStep] = useState(1)
   const [importDefaults, setImportDefaults] = useState({
@@ -327,6 +450,7 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
         <button onClick={openAdd} style={{ background: "#27ae60", color: "white", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>➕ Nueva</button>
         <button onClick={() => { resetImport(); setShowImport(true) }} style={{ background: "#8e44ad", color: "white", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>📥 Importar del Sistema</button>
         <button onClick={exportarPAC} disabled={!filtradas.length} style={{ background: "#2e75b6", color: "white", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: filtradas.length ? "pointer" : "default", opacity: filtradas.length ? 1 : .5, marginLeft: "auto" }}>⬇ Exportar PAC</button>
+        <button onClick={exportarAnexoDPP} disabled={!filtradas.length} title="Genera el Excel en el formato exacto del Anexo N°2 de la Directiva N°01/DPP/26, listo para enviar a DPP" style={{ background: "#8e44ad", color: "white", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: filtradas.length ? "pointer" : "default", opacity: filtradas.length ? 1 : .5 }}>📤 Anexo N°2 (DPP)</button>
       </div>
 
       {/* TABLA */}
@@ -335,16 +459,16 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: "#1a3a5c" }}>
-                {["Servicio", "ACCE / Variante", "Consumo 23/24/25", "Sistema (cant. / costo)", "Servicio (cant. / costo)", "Prior.", "Rubro DivCom", "Estado", ""].map(h => (
+                {["Servicio", "ARCE / Variante", "Consumo 23/24/25", "Sistema (cant. / costo)", "Servicio (cant. / costo)", "APG 2027 / 2028", "Prior.", "Rubro DivCom", "Estado", ""].map(h => (
                   <th key={h} style={{ color: "white", padding: "10px 12px", textAlign: "left", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={9} style={{ padding: 20, textAlign: "center", color: "#888" }}>Cargando…</td></tr>
+                <tr><td colSpan={10} style={{ padding: 20, textAlign: "center", color: "#888" }}>Cargando…</td></tr>
               ) : filtradas.length === 0 ? (
-                <tr><td colSpan={9} style={{ padding: 20, textAlign: "center", color: "#888" }}>No hay previsiones cargadas para este filtro.</td></tr>
+                <tr><td colSpan={10} style={{ padding: 20, textAlign: "center", color: "#888" }}>No hay previsiones cargadas para este filtro.</td></tr>
               ) : filtradas.map((p, i) => {
                 const e = estadoPrevInfo(p.estado)
                 const pr = PRIORIDAD_INFO[p.prioridad_servicio]
@@ -364,6 +488,10 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
                       <div style={{ fontWeight: 700 }}>{p.cantidad_solicitada_servicio} u.</div>
                       <div style={{ color: "#117a65", fontWeight: 700 }}>{fmt(p.costo_total_servicio)}</div>
                     </td>
+                    <td style={{ padding: "8px 12px", whiteSpace: "nowrap", fontSize: 11 }}>
+                      <div>'27: <b>{fmt(p.importe_apg_2027)}</b></div>
+                      <div>'28: <b>{fmt(p.importe_apg_2028)}</b></div>
+                    </td>
                     <td style={{ padding: "8px 12px" }}>
                       {pr && <span style={{ background: pr.bg, color: pr.color, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700 }}>{p.prioridad_servicio}</span>}
                     </td>
@@ -374,9 +502,23 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
                       <span style={{ background: e.bg, color: e.color, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 600 }}>{e.label}</span>
                     </td>
                     <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
-                      <div style={{ display: "flex", gap: 4 }}>
+                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <button onClick={() => openEdit(p)} style={{ background: "#e8f0fe", border: "none", borderRadius: 6, padding: "4px 7px", cursor: "pointer", fontSize: 11 }}>✏️</button>
+                        <button onClick={() => openAdjuntos(p)} title="Adjuntar documentos (Excel, PDF, etc. recibidos por correo)" style={{ background: "#fff3e0", border: "none", borderRadius: 6, padding: "4px 7px", cursor: "pointer", fontSize: 11 }}>📎</button>
                         {isAdmin && <button onClick={() => setConfirmDel(p)} style={{ background: "#fde8e8", border: "none", borderRadius: 6, padding: "4px 7px", cursor: "pointer", fontSize: 11 }}>🗑</button>}
+                        {p.procedimiento_id ? (
+                          <button onClick={() => onVerProcedimiento && onVerProcedimiento(p.procedimiento_id)}
+                            title="Ver procedimiento / APG vinculado"
+                            style={{ background: "#e8f8f0", color: "#27ae60", border: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+                            🔗 APG
+                          </button>
+                        ) : p.estado === "AUTORIZADA" ? (
+                          <button onClick={() => handleGenerarApg(p)} disabled={generandoId === p.id}
+                            title="Generar procedimiento y cargar APG a partir de esta previsión"
+                            style={{ background: "#8e44ad", color: "white", border: "none", borderRadius: 6, padding: "4px 8px", cursor: generandoId === p.id ? "default" : "pointer", fontSize: 11, fontWeight: 700, opacity: generandoId === p.id ? .6 : 1 }}>
+                            {generandoId === p.id ? "…" : "📝 Generar APG"}
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -405,19 +547,19 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
                 <input value={form.servicio_solicitante} onChange={e => setForm(p => ({ ...p, servicio_solicitante: e.target.value }))} style={inputStyle} />
               </div>
               <div>
-                <label style={labelStyle}>Cód. ACCE</label>
+                <label style={labelStyle}>Cód. ARCE</label>
                 <input value={form.cod_acce} onChange={e => setForm(p => ({ ...p, cod_acce: e.target.value }))} style={inputStyle} />
               </div>
               <div>
-                <label style={labelStyle}>Unidad de entrega ACCE</label>
+                <label style={labelStyle}>Unidad de entrega ARCE</label>
                 <input value={form.unidad_entrega_acce} onChange={e => setForm(p => ({ ...p, unidad_entrega_acce: e.target.value }))} style={inputStyle} />
               </div>
               <div style={{ gridColumn: "1/-1" }}>
-                <label style={labelStyle}>Descripción ACCE</label>
+                <label style={labelStyle}>Descripción ARCE</label>
                 <input value={form.descripcion_acce} onChange={e => setForm(p => ({ ...p, descripcion_acce: e.target.value }))} style={inputStyle} />
               </div>
               <div style={{ gridColumn: "1/-1" }}>
-                <label style={labelStyle}>Descripción variante ACCE</label>
+                <label style={labelStyle}>Descripción variante ARCE</label>
                 <input value={form.descripcion_variante_acce} onChange={e => setForm(p => ({ ...p, descripcion_variante_acce: e.target.value }))} style={inputStyle} />
               </div>
 
@@ -500,6 +642,28 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
                   {ESTADOS_PREV.map(e => <option key={e.v} value={e.v}>{e.label}</option>)}
                 </select>
               </div>
+              <div style={{ gridColumn: "1/-1", borderTop: "1px solid #eee", paddingTop: 14, fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase" }}>Anexo N°2 — Datos para envío a DPP</div>
+              <div style={{ gridColumn: "1/-1" }}>
+                <label style={labelStyle}>Nombre de la compra</label>
+                <input value={form.nombre_compra} onChange={e => setForm(p => ({ ...p, nombre_compra: e.target.value }))} style={inputStyle}
+                  placeholder={[form.descripcion_acce, form.descripcion_variante_acce].filter(Boolean).join(" — ")} />
+              </div>
+              <div>
+                <label style={labelStyle}>Importe APG 2027</label>
+                <input type="number" value={form.importe_apg_2027} onChange={e => setForm(p => ({ ...p, importe_apg_2027: e.target.value }))} style={inputStyle}
+                  placeholder={Number(form.anio_ejercicio) === 2027 ? fmt(num(form.costo_total_servicio)) : "0"} />
+              </div>
+              <div>
+                <label style={labelStyle}>Importe APG 2028</label>
+                <input type="number" value={form.importe_apg_2028} onChange={e => setForm(p => ({ ...p, importe_apg_2028: e.target.value }))} style={inputStyle}
+                  placeholder={Number(form.anio_ejercicio) === 2028 ? fmt(num(form.costo_total_servicio)) : "0"} />
+              </div>
+              <div style={{ gridColumn: "1/-1" }}>
+                <label style={labelStyle}>Estado de situación del procedimiento anterior</label>
+                <input value={form.estado_procedimiento_anterior} onChange={e => setForm(p => ({ ...p, estado_procedimiento_anterior: e.target.value }))} style={inputStyle}
+                  placeholder="Ej.: Nuevo / Renovación de expediente 123/2025 / Continúa vigente" />
+              </div>
+
               <div style={{ gridColumn: "1/-1" }}>
                 <label style={labelStyle}>Observaciones de DivCom</label>
                 <textarea value={form.observaciones} onChange={e => setForm(p => ({ ...p, observaciones: e.target.value }))} rows={2} style={{ ...inputStyle, resize: "vertical" }} />
@@ -511,6 +675,67 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
               <button onClick={saveForm} disabled={saving} style={{ background: "#2e75b6", border: "none", borderRadius: 8, padding: "9px 18px", cursor: "pointer", fontWeight: 600, color: "white", fontSize: 13 }}>
                 {saving ? "Guardando..." : "Guardar"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ADJUNTOS */}
+      {adjuntosModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }}
+          onClick={() => setAdjuntosModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "white", borderRadius: 14, width: "90%", maxWidth: 560, maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+            <div style={{ background: "#e67e22", padding: "14px 20px", borderRadius: "14px 14px 0 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ color: "white" }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>📎 Adjuntos de la previsión</div>
+                <div style={{ fontSize: 11, opacity: .9 }}>{adjuntosModal.descripcion_acce} — {adjuntosModal.servicio_solicitante}</div>
+              </div>
+              <button onClick={() => setAdjuntosModal(null)} style={{ background: "rgba(255,255,255,.2)", border: "none", color: "white", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 16 }}>✕</button>
+            </div>
+
+            <div style={{ padding: 20, overflowY: "auto" }}>
+              <p style={{ fontSize: 12, color: "#666", marginTop: 0 }}>
+                Subí acá cualquier documento relacionado con esta previsión que te haya llegado por correo (planillas de distribución de APG por años, cotizaciones, anexos, etc.), aunque no tenga el formato del Sistema de Previsiones.
+              </p>
+
+              <label style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                border: "2px dashed #e2e8f0", borderRadius: 10, padding: "18px", cursor: "pointer",
+                background: "#fafafa", fontSize: 13, color: "#555", fontWeight: 600, marginBottom: 16,
+              }}>
+                {uploadingAdjunto ? "Subiendo…" : "📄 Hacé clic para elegir uno o más archivos (Excel, PDF, imagen, etc.)"}
+                <input type="file" multiple disabled={uploadingAdjunto} style={{ display: "none" }}
+                  onChange={e => { if (e.target.files?.length) subirAdjuntos(e.target.files); e.target.value = "" }} />
+              </label>
+
+              {adjuntoErr && <div style={{ color: "#c0392b", fontSize: 12, marginBottom: 10 }}>⚠️ {adjuntoErr}</div>}
+
+              {loadingAdjuntos ? (
+                <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: 16 }}>Cargando…</div>
+              ) : adjuntos.length === 0 ? (
+                <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: 16 }}>Todavía no hay archivos adjuntos.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {adjuntos.map(f => (
+                    <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 10, background: "#f8f9fb", borderRadius: 8, padding: "8px 12px" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={f.name}>
+                          {f.name.replace(/^\d+_/, "")}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#888" }}>
+                          {fmtBytes(f.metadata?.size)} {f.created_at ? `· ${new Date(f.created_at).toLocaleDateString('es-UY')}` : ""}
+                        </div>
+                      </div>
+                      <button onClick={() => descargarAdjunto(f)} title="Descargar" style={{ background: "#e3f0fd", border: "none", borderRadius: 6, padding: "5px 9px", cursor: "pointer", fontSize: 12 }}>⬇</button>
+                      <button onClick={() => eliminarAdjunto(f)} title="Eliminar" style={{ background: "#fde8e8", border: "none", borderRadius: 6, padding: "5px 9px", cursor: "pointer", fontSize: 12 }}>🗑</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: "12px 20px", borderTop: "1px solid #eee", display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => setAdjuntosModal(null)} style={{ background: "#f0f0f0", border: "none", borderRadius: 8, padding: "9px 18px", cursor: "pointer", fontWeight: 600, color: "#555", fontSize: 13 }}>Cerrar</button>
             </div>
           </div>
         </div>
@@ -606,7 +831,7 @@ export default function PrevisionesView({ rubros, subRubros, isAdmin }) {
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                       <thead>
                         <tr style={{ background: "#f0f0f0" }}>
-                          {["Servicio", "Descripción ACCE", "Cant. Servicio", "Costo Total Servicio", "Prioridad"].map(h => (
+                          {["Servicio", "Descripción ARCE", "Cant. Servicio", "Costo Total Servicio", "Prioridad"].map(h => (
                             <th key={h} style={{ padding: "6px 8px", textAlign: "left", position: "sticky", top: 0, background: "#f0f0f0" }}>{h}</th>
                           ))}
                         </tr>
