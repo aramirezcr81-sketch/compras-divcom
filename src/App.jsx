@@ -875,7 +875,8 @@ function Dashboard({ session, perfil }) {
                   <thead>
                     <tr style={{background:"#1a3a5c"}}>
                       {["N° PROC.","TIPO","CONCEPTO","PROVEEDOR","IMPORTE","RUBRO","ESTADO","F. APERTURA",""].map(h=>(
-                        <th key={h} style={{color:"white",padding:"10px 12px",textAlign:"left",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>{h}</th>
+                        <th key={h} style={{color:"white",padding:"10px 12px",textAlign:"left",fontWeight:600,fontSize:11,whiteSpace:"nowrap",
+                          ...(h===""?{position:"sticky",right:0,background:"#1a3a5c",boxShadow:"-4px 0 6px -2px rgba(0,0,0,.15)"}:{})}}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -906,7 +907,8 @@ function Dashboard({ session, perfil }) {
                             </span>
                           </td>
                           <td style={{padding:"8px 12px",whiteSpace:"nowrap",color:"#666"}}>{fmtDate(r.fecha_apertura)||"-"}</td>
-                          <td style={{padding:"8px 12px",whiteSpace:"nowrap"}}>
+                          <td style={{padding:"8px 12px",whiteSpace:"nowrap",position:"sticky",right:0,
+                            background:i%2===0?"#fafbfc":"white",boxShadow:"-4px 0 6px -2px rgba(0,0,0,.15)"}}>
                             <div style={{display:"flex",gap:4}}>
                               <button onClick={()=>openView(r)} title="Ver" style={{background:"#e8f0fe",border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>👁</button>
                               <button onClick={()=>openEdit(r)} title="Editar" style={{background:"#e8f8f0",border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>✏️</button>
