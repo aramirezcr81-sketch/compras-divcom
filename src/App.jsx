@@ -170,8 +170,8 @@ function EsperandoAprobacion({ session }) {
 function Dashboard({ session, perfil }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
-  const [view, setViewRaw] = useState(() => sessionStorage.getItem("divcom_view") || "resumen")
-  const setView = (v) => { setViewRaw(v); sessionStorage.setItem("divcom_view", v) }
+  const [view, setViewRaw] = useState(() => localStorage.getItem("divcom_view") || "resumen")
+  const setView = (v) => { setViewRaw(v); localStorage.setItem("divcom_view", v) }
   const [search, setSearch] = useState("")
   const [filterTipo, setFilterTipo] = useState("")
   const [filterEstado, setFilterEstado] = useState("")
@@ -186,8 +186,8 @@ function Dashboard({ session, perfil }) {
   const [apgModal, setApgModalRaw] = useState(null)
   const setApgModal = (rec) => {
     setApgModalRaw(rec)
-    if (rec) sessionStorage.setItem("divcom_apg_open_id", rec.id)
-    else sessionStorage.removeItem("divcom_apg_open_id")
+    if (rec) localStorage.setItem("divcom_apg_open_id", rec.id)
+    else localStorage.removeItem("divcom_apg_open_id")
   }
   const [restauroApg, setRestauroApg] = useState(false)
   const [showExport, setShowExport] = useState(false)
@@ -215,11 +215,11 @@ function Dashboard({ session, perfil }) {
 
   useEffect(() => {
     if (restauroApg || loading || !data.length) return
-    const savedId = sessionStorage.getItem("divcom_apg_open_id")
+    const savedId = localStorage.getItem("divcom_apg_open_id")
     if (savedId) {
       const rec = data.find(r => String(r.id) === savedId)
       if (rec) setApgModalRaw(rec)
-      else sessionStorage.removeItem("divcom_apg_open_id")
+      else localStorage.removeItem("divcom_apg_open_id")
     }
     setRestauroApg(true)
   }, [loading, data, restauroApg])
