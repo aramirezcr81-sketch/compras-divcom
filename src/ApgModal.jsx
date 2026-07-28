@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from './supabaseClient'
 import { generarAnexoCompraDirecta, generarNotaJefe, generarDistribucionAnios, generarFormularioA, generarFormularioB } from './docGenerators'
 import { itemTotalUR, itemCantidadTotal, itemTotalURTotal, grandTotalUR, grandTotalPesos, basePesosSinVariacion, fmtUR, fmtPesos } from './apgCalc'
@@ -125,6 +125,7 @@ export default function ApgModal({ procedimiento, session, onClose }) {
   const [refCache, setRefCache] = useState({}) // codigo_arce -> [{estudio, frecuencia}]
   const [refLoading, setRefLoading] = useState(false)
   const [borradorRestaurado, setBorradorRestaurado] = useState(false)
+  const [autosaveStatus, setAutosaveStatus] = useState("") // "" | "guardando" | "guardado" | "error"
   const draftKey = `apg_draft_${procedimiento.id}`
 
   const buscarReferenciaArce = async (it) => {
@@ -228,8 +229,12 @@ export default function ApgModal({ procedimiento, session, onClose }) {
 
   const itemsCalc = items.filter(it => it.codigo_arce || it.descripcion_arce)
 
-  const saveApg = async () => {
-    setSaving(true); setErrMsg("")
+  // Guarda tramite + items en la base. `silencioso=true` lo usa el autoguardado
+  // (no toca el spinner ni el cartel de error grande, para no interrumpir mientras
+  // se está escribiendo). Devuelve true/false según haya salido bien.
+  const persistir = async ({ silencioso = false } = {}) => {
+    if (!silencioso) { setSaving(true); setErrMsg("") } else { setAutosaveStatus("guardando") }
+
     const payload = {
       procedimiento_id: procedimiento.id,
       moneda: tramite.moneda,
@@ -275,13 +280,18 @@ export default function ApgModal({ procedimiento, session, onClose }) {
       updated_by: session.user.id,
     }
 
+    const fail = (msg) => {
+      if (!silencioso) { setErrMsg(msg); setSaving(false) } else { setAutosaveStatus("error") }
+      return false
+    }
+
     let tramiteId = tramite.id
     if (tramiteId) {
       const { error } = await supabase.from('apg_tramite').update(payload).eq('id', tramiteId)
-      if (error) { setErrMsg(error.message); setSaving(false); return }
+      if (error) return fail(error.message)
     } else {
       const { data, error } = await supabase.from('apg_tramite').insert([{ ...payload, created_by: session.user.id }]).select().single()
-      if (error) { setErrMsg(error.message); setSaving(false); return }
+      if (error) return fail(error.message)
       tramiteId = data.id
       setTramite(p => ({ ...p, id: tramiteId }))
       await supabase.from('apg_estado_historial').insert([{
@@ -293,7 +303,7 @@ export default function ApgModal({ procedimiento, session, onClose }) {
 
     // Reemplazar ítems: borrar los anteriores e insertar los actuales (simple y seguro para este volumen de datos)
     const { error: delErr } = await supabase.from('apg_items').delete().eq('tramite_id', tramiteId)
-    if (delErr) { setErrMsg(delErr.message); setSaving(false); return }
+    if (delErr) return fail(delErr.message)
 
     for (const it of itemsCalc) {
       const { data: itemRow, error: itErr } = await supabase.from('apg_items').insert([{
@@ -302,18 +312,18 @@ export default function ApgModal({ procedimiento, session, onClose }) {
         precio_unitario_ur: Number(it.precio_unitario_ur) || 0, iva_pct: Number(it.iva_pct) || 0,
         convenio_marco: it.convenio_marco || "NO", requiere_muestra: !!it.requiere_muestra,
       }]).select().single()
-      if (itErr) { setErrMsg(itErr.message); setSaving(false); return }
+      if (itErr) return fail(itErr.message)
 
       const filasAnios = anios.filter(a => Number(it.anios[a]) > 0).map(a => ({
         item_id: itemRow.id, anio: a, cantidad: Number(it.anios[a]) || 0,
       }))
       if (filasAnios.length) {
         const { error: ayErr } = await supabase.from('apg_items_anios').insert(filasAnios)
-        if (ayErr) { setErrMsg(ayErr.message); setSaving(false); return }
+        if (ayErr) return fail(ayErr.message)
       }
     }
 
-    setSaving(false)
+    if (!silencioso) { setSaving(false) } else { setAutosaveStatus("guardado") }
     try { localStorage.removeItem(draftKey) } catch { /* no-op */ }
     setBorradorRestaurado(false)
 
@@ -322,7 +332,29 @@ export default function ApgModal({ procedimiento, session, onClose }) {
     await supabase.from('compras').update({
       numero_apg: tramite.numero_apg || null,
     }).eq('id', procedimiento.id)
+
+    return true
   }
+
+  const saveApg = () => persistir({ silencioso: false })
+
+  // ── Autoguardado real: a los 2,5s de que dejás de escribir, se guarda solo
+  // en la base de datos (no depende del navegador ni de que aprietes Guardar).
+  const lastSnapshotRef = useRef(null)
+  const debounceRef = useRef(null)
+  useEffect(() => {
+    if (loading) return
+    const snapshot = JSON.stringify({ tramite, items, anios })
+    if (lastSnapshotRef.current === null) { lastSnapshotRef.current = snapshot; return } // recién cargado, no hay nada nuevo que guardar
+    if (snapshot === lastSnapshotRef.current) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      const ok = await persistir({ silencioso: true })
+      if (ok) lastSnapshotRef.current = JSON.stringify({ tramite, items, anios })
+    }, 2500)
+    return () => clearTimeout(debounceRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tramite, items, anios, loading])
 
   const cambiarEstado = async () => {
     if (!tramite.id) { setErrMsg("Primero guardá los datos del trámite (botón de abajo) para poder registrar el estado."); return }
@@ -375,6 +407,9 @@ export default function ApgModal({ procedimiento, session, onClose }) {
             <div style={{color:"white",fontWeight:700,fontSize:16}}>📑 Documentación APG</div>
             <div style={{color:"#bcd4ec",fontSize:12,marginTop:2}}>{procedimiento.procedimiento} — {procedimiento.concepto}</div>
             {tramite.numero_apg && <div style={{color:"white",fontSize:12,marginTop:4,fontWeight:700}}>N° de APG: {tramite.numero_apg}</div>}
+            {autosaveStatus === "guardando" && <div style={{color:"#ffe9a8",fontSize:11,marginTop:4}}>💾 Guardando automáticamente…</div>}
+            {autosaveStatus === "guardado" && <div style={{color:"#a8f0c6",fontSize:11,marginTop:4}}>✓ Guardado automáticamente en la base de datos</div>}
+            {autosaveStatus === "error" && <div style={{color:"#ffb3b3",fontSize:11,marginTop:4}}>⚠ No se pudo autoguardar — revisá tu conexión y usá el botón Guardar</div>}
           </div>
           <button onClick={onClose} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:16}}>✕</button>
         </div>
