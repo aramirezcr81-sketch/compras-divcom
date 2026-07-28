@@ -124,6 +124,8 @@ export default function ApgModal({ procedimiento, session, onClose }) {
   const [refOpen, setRefOpen] = useState(null) // _key del ítem con el popover de referencia abierto
   const [refCache, setRefCache] = useState({}) // codigo_arce -> [{estudio, frecuencia}]
   const [refLoading, setRefLoading] = useState(false)
+  const [borradorRestaurado, setBorradorRestaurado] = useState(false)
+  const draftKey = `apg_draft_${procedimiento.id}`
 
   const buscarReferenciaArce = async (it) => {
     const codigo = Number(it.codigo_arce)
@@ -179,10 +181,38 @@ export default function ApgModal({ procedimiento, session, onClose }) {
         }
       }
       setLoading(false)
+
+      // Si había un borrador sin guardar (ej. la página se recargó a mitad de carga),
+      // lo restauramos por encima de lo que vino de la base, porque es más reciente.
+      try {
+        const raw = localStorage.getItem(draftKey)
+        if (raw) {
+          const draft = JSON.parse(raw)
+          const catorceDiasMs = 14 * 24 * 60 * 60 * 1000
+          if (draft?.guardado && (Date.now() - draft.guardado) > catorceDiasMs) {
+            localStorage.removeItem(draftKey) // borrador demasiado viejo, se descarta solo
+          } else {
+            if (draft?.tramite) setTramite(p => ({ ...p, ...draft.tramite }))
+            if (draft?.items?.length) setItems(draft.items)
+            if (draft?.anios?.length) setAnios(draft.anios)
+            setBorradorRestaurado(true)
+          }
+        }
+      } catch { /* borrador corrupto: se ignora */ }
     })()
   }, [procedimiento.id])
 
   const updateTramite = (key, val) => setTramite(p => ({ ...p, [key]: val }))
+
+  // Autoguardado: mientras el usuario escribe, vamos dejando un borrador en el
+  // navegador. Si la pestaña se recarga a mitad de carga (batería, memoria, etc.),
+  // al volver a abrir este mismo trámite se restaura solo, sin perder lo tipeado.
+  useEffect(() => {
+    if (loading) return
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ tramite, items, anios, guardado: Date.now() }))
+    } catch { /* si localStorage está lleno o bloqueado, seguimos sin autoguardado */ }
+  }, [tramite, items, anios, loading, draftKey])
 
   const addItem = () => setItems(p => [...p, emptyItem()])
   const removeItem = (key) => setItems(p => p.length > 1 ? p.filter(it => it._key !== key) : p)
@@ -284,6 +314,8 @@ export default function ApgModal({ procedimiento, session, onClose }) {
     }
 
     setSaving(false)
+    try { localStorage.removeItem(draftKey) } catch { /* no-op */ }
+    setBorradorRestaurado(false)
 
     // Espejar el N° de APG (y el expediente) en `compras` para poder verlos/buscarlos
     // desde el listado principal sin abrir este modal.
@@ -353,6 +385,16 @@ export default function ApgModal({ procedimiento, session, onClose }) {
           <div style={{padding:24}}>
 
             {errMsg && <div style={{background:"#fde8e8",color:"#c0392b",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13}}>⚠️ {errMsg}</div>}
+
+            {borradorRestaurado && (
+              <div style={{background:"#fff8e1",color:"#8a6d00",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <span>💾 Se restauraron cambios sin guardar de una sesión anterior en este mismo trámite.</span>
+                <button onClick={() => { try { localStorage.removeItem(draftKey) } catch {} ; window.location.reload() }}
+                  style={{background:"#8a6d00",color:"white",border:"none",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:12,whiteSpace:"nowrap"}}>
+                  Descartar y recargar desde la base
+                </button>
+              </div>
+            )}
 
             {/* ── ESTADO DEL TRÁMITE ── */}
             <div style={{fontWeight:700,color:"#1a3a5c",fontSize:13,marginBottom:10}}>📌 Estado del trámite</div>
