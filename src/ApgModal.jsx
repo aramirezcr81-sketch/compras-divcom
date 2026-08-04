@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './supabaseClient'
-import { generarAnexoCompraDirecta, generarNotaJefe, generarDistribucionAnios, generarFormularioA, generarFormularioB } from './docGenerators'
+import { generarAnexoCompraDirecta, generarNotaJefe, generarDistribucionAnios, generarFormularioA, generarFormularioB, generarMemoAutorizacionGastar } from './docGenerators'
 import { itemTotalUR, itemCantidadTotal, itemTotalURTotal, grandTotalUR, grandTotalPesos, basePesosSinVariacion, fmtUR, fmtPesos } from './apgCalc'
 
 const MESES = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
@@ -53,8 +53,16 @@ const emptyTramite = (procedimiento) => ({
   iniciales_firma: "",
   cotizacion_ur: "",
   mes_cotizacion: `${MESES[new Date().getMonth()]} ${new Date().getFullYear()}`,
-  pct_variacion_cambio: 0,
+  pct_variacion_cambio: 10,
   condiciones_particulares: "",
+  // MEMO — Solicitud de Autorización para Gastar ─────────────────────
+  memo_tipo_tramite: "INICIO",
+  memo_referencia_expediente: "",
+  memo_motivo: "",
+  memo_rubro: "",
+  memo_financiacion: "Fondos de terceros",
+  memo_iva_exento: false,
+  destinatario_memo: "Jefe de la División Planeamiento y Presupuesto",
   // Formulario A / B ────────────────────────────────────────────────
   formulario_tipo: FORMULARIO_TIPO_DEFAULT[procedimiento.tipo] || "A",
   fecha_solicitud: new Date().toISOString().slice(0, 10),
@@ -256,6 +264,14 @@ export default function ApgModal({ procedimiento, session, onClose }) {
       mes_cotizacion: tramite.mes_cotizacion,
       pct_variacion_cambio: Number(tramite.pct_variacion_cambio) || 0,
       condiciones_particulares: tramite.condiciones_particulares,
+      // MEMO — Solicitud de Autorización para Gastar ─────────────────
+      memo_tipo_tramite: tramite.memo_tipo_tramite,
+      memo_referencia_expediente: tramite.memo_referencia_expediente,
+      memo_motivo: tramite.memo_motivo,
+      memo_rubro: tramite.memo_rubro,
+      memo_financiacion: tramite.memo_financiacion,
+      memo_iva_exento: !!tramite.memo_iva_exento,
+      destinatario_memo: tramite.destinatario_memo,
       // Formulario A / B ────────────────────────────────────────────
       formulario_tipo: tramite.formulario_tipo,
       fecha_solicitud: tramite.fecha_solicitud || null,
@@ -381,12 +397,13 @@ export default function ApgModal({ procedimiento, session, onClose }) {
   const handleGenerar = async (tipo) => {
     setGenerando(tipo)
     try {
-      const t = { ...tramite, procedimiento: procedimiento.procedimiento, concepto: procedimiento.concepto }
+      const t = { ...tramite, procedimiento: procedimiento.procedimiento, concepto: procedimiento.concepto, tipo_codigo: procedimiento.tipo }
       if (tipo === "anexo") await generarAnexoCompraDirecta(t, itemsCalc, anios)
       if (tipo === "nota") await generarNotaJefe(t, itemsCalc, anios)
       if (tipo === "distribucion") await generarDistribucionAnios(t, itemsCalc, anios)
       if (tipo === "formularioA") await generarFormularioA(t, itemsCalc, anios)
       if (tipo === "formularioB") await generarFormularioB(t, itemsCalc, anios)
+      if (tipo === "memo") await generarMemoAutorizacionGastar(t, itemsCalc, anios)
     } catch (e) {
       setErrMsg("Error al generar el documento: " + e.message)
     }
@@ -533,6 +550,35 @@ export default function ApgModal({ procedimiento, session, onClose }) {
               )}
               <Field label="% variación de cambio (previsión)" type="number" value={tramite.pct_variacion_cambio} onChange={v=>updateTramite("pct_variacion_cambio",v)} />
               <Field label="Condiciones particulares (una por línea — viñetas en el Anexo)" type="textarea" value={tramite.condiciones_particulares} onChange={v=>updateTramite("condiciones_particulares",v)} full />
+            </div>
+
+            {/* ── MEMO: SOLICITUD DE AUTORIZACIÓN PARA GASTAR ── */}
+            <div style={{background:"#fef9f0",border:"1px solid #f0e0c0",borderRadius:10,padding:14,marginBottom:20}}>
+              <div style={{fontWeight:700,color:"#1a3a5c",fontSize:12,marginBottom:10}}>📨 MEMO — Solicitud de Autorización para Gastar (a Planeamiento y Presupuesto)</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+                <div>
+                  <label style={labelStyle}>Tipo de trámite</label>
+                  <select value={tramite.memo_tipo_tramite} onChange={e=>updateTramite("memo_tipo_tramite", e.target.value)} style={{...inputStyle, cursor:"pointer"}}>
+                    <option value="INICIO">Inicio</option>
+                    <option value="AMPLIACION">Ampliación</option>
+                    <option value="AMPLIACION_PARCIAL">Ampliación parcial</option>
+                  </select>
+                </div>
+                {tramite.memo_tipo_tramite !== "INICIO" && (
+                  <Field label="N° del procedimiento que se amplía (ej: 024/26)" value={tramite.memo_referencia_expediente} onChange={v=>updateTramite("memo_referencia_expediente",v)} />
+                )}
+                <Field label="Destinatario (Planeamiento y Presupuesto)" value={tramite.destinatario_memo} onChange={v=>updateTramite("destinatario_memo",v)} />
+              </div>
+              <Field label="Motivo / contexto (párrafo completo: imprevistos/previsiones del año, justificación)" type="textarea" value={tramite.memo_motivo} onChange={v=>updateTramite("memo_motivo",v)} full />
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:10}}>
+                <Field label="Rubro / Sub-rubro (se descuenta de)" value={tramite.memo_rubro} onChange={v=>updateTramite("memo_rubro",v)} />
+                <Field label="Financiación" value={tramite.memo_financiacion} onChange={v=>updateTramite("memo_financiacion",v)} />
+                <div style={{display:"flex",alignItems:"flex-end",paddingBottom:8}}>
+                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12}}>
+                    <input type="checkbox" checked={!!tramite.memo_iva_exento} onChange={e=>updateTramite("memo_iva_exento", e.target.checked)} /> IVA exento (si no, va "IVA incluido")
+                  </label>
+                </div>
+              </div>
             </div>
 
             {/* ── DOCUMENTACIÓN ADJUNTA (manual 3.4) ── */}
@@ -706,6 +752,9 @@ export default function ApgModal({ procedimiento, session, onClose }) {
               </button>
               <button onClick={()=>handleGenerar("distribucion")} disabled={!!generando} style={{background:"#8e44ad",color:"white",border:"none",borderRadius:8,padding:"10px 16px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
                 {generando==="distribucion" ? "Generando..." : "📄 Distribución por años"}
+              </button>
+              <button onClick={()=>handleGenerar("memo")} disabled={!!generando} style={{background:"#B8860B",color:"white",border:"none",borderRadius:8,padding:"10px 16px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+                {generando==="memo" ? "Generando..." : "📨 MEMO Autorización para Gastar"}
               </button>
             </div>
             <div style={{fontSize:11,color:"#999",marginTop:8}}>Los documentos se generan en Word para que puedas revisarlos, ajustar el texto libre y agregar el membrete institucional antes de imprimir o subir al expediente.</div>
