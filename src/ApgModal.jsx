@@ -53,7 +53,7 @@ const emptyTramite = (procedimiento) => ({
   iniciales_firma: "",
   cotizacion_ur: "",
   mes_cotizacion: `${MESES[new Date().getMonth()]} ${new Date().getFullYear()}`,
-  pct_variacion_cambio: 10,
+  pct_variacion_cambio: 0,
   condiciones_particulares: "",
   // Formulario A / B ────────────────────────────────────────────────
   formulario_tipo: FORMULARIO_TIPO_DEFAULT[procedimiento.tipo] || "A",
